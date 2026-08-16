@@ -20,7 +20,7 @@ export interface Harness {
 
 const baseUrl = inject("baseUrl");
 
-export const harness: Harness = {
+export const harness = {
   async newScope() {
     const res = await harness.fetch("/v1/keys", { method: "POST" });
     if (res.status !== 201) {
@@ -33,4 +33,4 @@ export const harness: Harness = {
   fetch(path, init) {
     return fetch(new URL(path, baseUrl), init);
   },
-};
+} satisfies Harness;

@@ -3,9 +3,10 @@
 A vendor-neutral HTTP protocol for **pre-flight budget enforcement**: setting spending
 limits and drawing against them _before_ a metered operation happens.
 
-This document specifies the wire protocol. It does not specify storage, authentication,
-or deployment. Any server implementing the endpoints and semantics below is a conforming
-Horse Holder implementation.
+This document specifies the wire protocol. It does not specify storage, deployment, or how
+credentials are issued and verified; of authentication it fixes only where a credential
+travels on the wire (§9). Any server implementing the endpoints and semantics below is a
+conforming Horse Holder implementation.
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are to be interpreted as
 described in RFC 2119.
@@ -15,10 +16,10 @@ described in RFC 2119.
 ## 1. Concepts
 
 **Scope** — The authorization boundary. Every request resolves to exactly one scope,
-determined by the implementation's authentication scheme (see §9). A scope isolates
-budgets completely: two scopes may use identical budget IDs without interacting.
-For an unauthenticated single-user self-hosted deployment, there is exactly one
-implicit scope.
+determined by the server from the request's credentials and never named by the caller
+(see §9). A scope isolates budgets completely: two scopes may use identical budget IDs
+without interacting. For an unauthenticated single-user self-hosted deployment, there is
+exactly one implicit scope, and every request resolves to it.
 
 **Tenant** — An optional, caller-defined subdivision within a scope, sent per-request.
 Used to give each of _your_ end users their own copy of the same budget.
@@ -135,12 +136,14 @@ draw, which reintroduces exactly the shared bottleneck groups exist to remove.
 
 | Header              | Direction | Required                                 | Meaning                                                                        |
 | ------------------- | --------- | ---------------------------------------- | ------------------------------------------------------------------------------ |
+| `authorization`     | request   | when the server requires credentials     | The caller's credential. Scheme is implementation-defined. See §9.             |
 | `idempotency-key`   | request   | on `POST /v1/charge`, `POST /v1/reserve` | Deduplication key. See §7.                                                     |
 | `hh-tenant`         | request   | no                                       | Tenant for this request. Absent means the scope's default tenant.              |
 | `hh-group`          | request   | yes                                      | Atomicity domain for this request. No default.                                 |
 | `hh-reservation-id` | request   | on `/v1/commit`, `/v1/release`           | Identifies the reservation being settled.                                      |
 | `hh-ttl-seconds`    | request   | no                                       | Reservation lifetime. `POST /v1/reserve` only.                                 |
 | `retry-after`       | response  | on `402`                                 | Standard HTTP header. Seconds until the earliest renewal among failed budgets. |
+| `www-authenticate`  | response  | no                                       | Standard HTTP header. SHOULD accompany `401`. See §9.                          |
 
 ### Route shape
 
@@ -760,15 +763,57 @@ depends on it.
 This protocol deliberately omits several concerns so implementations can layer them
 without diverging from the wire format.
 
-**Authentication.** Entirely implementation-defined. A conforming server MAY require API
-keys, OAuth, mTLS, a signed header, or nothing at all. The only requirement is that every
-request resolves to exactly one **scope** (§1). Implementations requiring credentials
-SHOULD use the standard `authorization` header and MUST respond `401` when credentials
-are absent or invalid, and `403` when valid credentials lack access to the requested
-resource.
+**Authentication.** The *scheme* is implementation-defined; the *placement* is not.
 
-**Multi-key and rotation.** An implementation MAY map several credentials to one scope.
-Nothing in the wire format changes.
+A conforming server MAY require API keys, OAuth, mTLS, a signed header, or nothing at all.
+This document does not say how a credential is minted, what it looks like, how long it
+lives, or how it is verified. It fixes only where one travels, because a client that cannot
+predict that cannot be written once and pointed at an arbitrary implementation.
+
+1. **One header.** A server requiring credentials MUST accept them in the standard
+   `authorization` request header, and MUST NOT require them anywhere else: not in another
+   header, not in the query string, not in the request body. The header's value is opaque to
+   this protocol; servers SHOULD use the `Bearer <token>` form of RFC 6750 so that the
+   commonest client configuration works with no per-server adaptation.
+
+   A server MAY *additionally* accept a credential elsewhere (mTLS at the transport layer, a
+   vendor header) as long as `authorization` alone is always sufficient.
+
+2. **Always sendable.** A caller MAY send `authorization` on every request to every endpoint,
+   and a client SHOULD do so whenever it has been given a credential. A server that does not
+   authenticate, or that resolves this particular request's scope some other way, MUST ignore
+   an `authorization` header it has no use for. It MUST NOT reject the request as malformed,
+   and MUST NOT vary its behavior based on the header's presence or content.
+
+   This is the rule that makes one client work everywhere. Without it, a client holding a
+   credential would have to know in advance whether a given deployment wants it, and pointing
+   that client at an unauthenticated self-hosted server would fail on a header the server
+   simply had no opinion about.
+
+3. **Scope comes from the credential, never from the caller.** Every request MUST resolve to
+   exactly one **scope** (§1), and the resolution MUST be the server's alone. This protocol
+   defines no header, field, or path segment by which a caller names its own scope, and an
+   implementation MUST NOT define one: a scope a caller can ask for is a scope a caller can
+   ask for someone else's. Callers subdivide with `hh-tenant` (§1), which lives *inside* the
+   scope the credential resolved to and therefore grants nothing.
+
+4. **Rejection is uniform.** A server MUST respond `401` with code `unauthenticated` when
+   credentials are absent or invalid, and `403` with code `forbidden` when valid credentials
+   lack access to what was requested. Both carry the standard error body of §10. A `401`
+   SHOULD carry a `www-authenticate` header naming the scheme the server wants.
+
+5. **Rejection happens first, and changes nothing.** Authentication MUST be resolved before
+   the request is otherwise validated or applied. A request that fails it MUST receive `401`
+   or `403` even if it is also malformed. Reporting `400` on an unauthenticated request leaks
+   whether a body was well-formed to a caller with no standing to know. Such a request
+   MUST NOT draw, MUST NOT settle a reservation, and MUST NOT create or consume an
+   idempotency record (§7): the same key remains available to a later, authenticated retry.
+
+**Multi-key and rotation.** An implementation MAY map several credentials to one scope, and
+a caller MAY change the credential it sends between requests without any effect on budget
+state. Scope is what identifies a budget (§1); the credential merely proves entitlement to
+it. Two keys resolving to one scope therefore address the same budgets and share
+idempotency records, which is what makes key rotation a non-event.
 
 **Notifications.** Webhooks, email, and paging on `warningsCrossed` or `402` are out of
 scope.
@@ -805,8 +850,8 @@ reading `budgets` on a `200` reads the identical field on a `402`.
 | Status | Code                      | Meaning                                                                                                                                                                                                        |
 | ------ | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 400    | `invalid_request`         | Malformed body, missing field, unknown definition field, negative amount, zero or negative limit, duplicate budget ID, more than 16 budgets, missing `hh-group`, identifier failing the charset rules of §1.1. |
-| 401    | `unauthenticated`         | Missing or invalid credentials.                                                                                                                                                                                |
-| 403    | `forbidden`               | Valid credentials, insufficient access.                                                                                                                                                                        |
+| 401    | `unauthenticated`         | Missing or invalid credentials (§9). Takes precedence over `400`.                                                                                                                                              |
+| 403    | `forbidden`               | Valid credentials, insufficient access (§9). Takes precedence over `400`.                                                                                                                                      |
 | 404    | `reservation_not_found`   | Unknown or expired reservation.                                                                                                                                                                                |
 | 402    | `budget_exceeded`         | Insufficient capacity. Accompanied by a top-level `budgets` array.                                                                                                                                             |
 | 409    | `idempotency_conflict`    | Key reused with a different body.                                                                                                                                                                              |

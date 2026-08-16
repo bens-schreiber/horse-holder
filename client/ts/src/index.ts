@@ -86,8 +86,9 @@ export interface ClientOptions extends TransportOptions {
   /**
    * Headers to send on every request, either fixed or computed fresh each time.
    *
-   * Authentication is not part of the protocol, so this is the escape hatch for whatever your
-   * server actually wants: a signed header, a token that expires, something bespoke.
+   * The protocol fixes where a credential goes (the `authorization` header) but not what it
+   * looks like, so this is the escape hatch for whatever your server actually wants: a signed
+   * value, a token that expires, something bespoke.
    *
    * ```ts
    * headers: async () => ({ authorization: `Bearer ${await mintToken()}` }),
