@@ -1,177 +1,275 @@
-# Horse Holder
+<div align="center">
 
-A conforming [Horse Holder v1](spec/spec.md) server: pre-flight budget enforcement over HTTP,
-on Cloudflare Workers and Durable Objects.
+<img src="https://media1.tenor.com/m/DUnHVP-oFKMAAAAd/all-the-deer-deer.gif" width="420" alt="A bouncer letting in deer, and more deer, and more deer" />
 
-One Durable Object per `(scope, tenant, group)` triple. That triple is the protocol's atomicity
-domain, so making it the transactional unit means all-or-nothing holds structurally rather than
-by careful request handling: a draw cannot span two objects, and inside one there is no
-concurrency for a check-and-decrement to lose to. The Worker validates every request and reaches
-the storage tier only by typed RPC, so nothing downstream re-parses the wire format.
+# Hold your horses.
 
-## Layout
-
-```
-api/src/index.ts       Worker entry for the standalone API: fetch handler plus the DO export
-api/src/serve.ts       Routing, validation, and RPC dispatch
-api/src/auth.ts        Bearer API keys, one scope each
-api/src/budget.ts      BudgetGroup DO: all protocol semantics, reached by RPC
-api/src/expiry.ts      The deadline heap that drives expiry, renewal, and reclamation
-api/src/schema.ts      Headers, paths, codes, zod request schemas, error envelope
-api/src/renewal.ts     Renewal rules and their boundary math (timezones, DST, clamping)
-api/tests/             Our extensions and internals
-tests/spec/            Protocol conformance suite, implementation-agnostic
-tests/*.ts             Its scaffolding: server setup, harness, request vocabulary
-client/ts/             TypeScript client for the protocol, vendor-neutral, zero deps
-examples/ts/           Runnable client examples, one per file, nothing else
-tests/examples/        The driver that runs them and asserts they pass
-site/                  The website, and the Worker that serves it and the API
-```
-
-[api/](api/) is standalone: `wrangler deploy` from that directory publishes the whole API and
-nothing else, and no file in it imports from `site/`. See [api/README.md](api/README.md) for
-deploying it by itself.
-
-The website is an optional front end over that same code rather than a second implementation.
-Astro owns routing; `site/src/pages/v1/[...path].ts` delegates every API request to `serve()` in
-`api/src/serve.ts`, unchanged. `site/worker.ts` is the entry `wrangler` deploys for the site: it
-re-exports Astro's handler alongside the `BudgetGroup` Durable Object, which has to be exported
-from the Worker's own entry point. So one Worker serves both the pages and `/v1/*`, and same
-origin means no CORS, no allowlist, and no API URL for the site to configure.
-
-`serve.ts` is split from `index.ts` so the handler carries no value import of the Durable Object
-class. `budget.ts` imports `cloudflare:workers`, which resolves only inside workerd; a handler
-that pulled it in could not be loaded by `astro dev`'s Vite SSR, which is what `/keys` needs.
-
-The front page is prerendered and served from the assets binding at no compute cost. `/keys` is
-the one page with behavior: a plain form that POSTs to itself and issues an account and its first
-key. The site ships zero client JavaScript, which is why its CSP can be `script-src 'none'`.
-
-`examples/ts` deliberately sits outside every workspace package, so that an example reads
-exactly like calling code in someone else's project. That is why the root `package.json`
-depends on `@horse-holder/client`: it is what resolves the import for those files.
-
-## Commands
-
-Everything runs from the `Makefile` at the repo root; there is no `scripts` block in any
-`package.json`.
-
-| Command             | Does                                                 |
-| ------------------- | ---------------------------------------------------- |
-| `make test`         | Both suites (the default target)                     |
-| `make test-spec`    | Conformance suite only                               |
-| `make test-impl`    | Implementation suite only                            |
-| `make check`        | Types, format, lint, typecheck, and both suites      |
-| `make dev`          | Build the site, then `wrangler dev` on port 8787     |
-| `make site-dev`     | `astro dev` with HMR, for the look of the front page |
-| `make site-build`   | Build the site to `site/dist`                        |
-| `make fmt`          | Format in place                                      |
-| `make watch`        | Tests in watch mode                                  |
-| `make build-client` | Build `@horse-holder/client` to `client/ts/dist`     |
-| `make example`      | Run the client examples against a live server        |
-
-`make dev` and `make site-dev` trade off against each other. The Astro adapter's platform proxy
-cannot instantiate a Durable Object defined in the same Worker, so under `astro dev` every page
-renders and `/keys` issues keys, but the endpoints that draw on a budget do not work. Use
-`site-dev` for the look of the pages, and `dev` for anything that touches a budget. `make
-test-spec` builds the site first, since the Worker it boots serves both.
-
-`site/wrangler.dev.jsonc` is why `site-dev` boots without warnings: it is the bindings config
-the platform proxy reads, identical to `site/wrangler.jsonc` minus the Durable Object that only
-the deployed Worker can export.
-
-## Using it
-
-Issue a key, then send it as a bearer token:
+[Website](https://horseholder.dev) · [Spec](spec/spec.md) · [OpenAPI](spec/openapi.yaml) · [Client](client/ts) · [MIT](LICENSE)
+</div>
 
 ```bash
-curl -XPOST localhost:8787/v1/keys
-# {"accountId":"acct_...","apiKey":"hh_sk_..."}
+# Install via pnpm
+pnpm add @horse-holder/client
 
-curl -XPOST localhost:8787/v1/charge \
-  -H "authorization: Bearer hh_sk_..." \
-  -H "hh-group: storage" \
-  -H "idempotency-key: $(uuidgen)" \
-  -H "content-type: application/json" \
-  -d '{"budgets":[{"id":"r2-put-ops","amount":1,
-        "definition":{"limit":1000000,"warnings":[0.8],
-          "renewal":{"type":"calendar","unit":"month","timezone":"America/Chicago"}}}]}'
+# Install via npm
+npm install @horse-holder/client
 ```
 
-### From TypeScript
-
-[client/ts/](client/ts/) is a zero-dependency client for the protocol. It is written against
-[the specification](spec/spec.md) rather than against this server, so it has no notion of
-`/v1/keys` or anything else this deployment adds on top, and pointing `baseUrl` at any
-conforming implementation is the whole of the porting effort.
-
-The client's primary object is a **group**, since a group is the atomicity domain and the only
-thing a request can address. Declare one with its budgets, then draw:
+## Ask before you spend
 
 ```ts
 import { HorseHolderClient, renewal } from "@horse-holder/client";
 
-const hhldr = new HorseHolderClient({ baseUrl, apiKey });
+const hhldr = new HorseHolderClient({
+  baseUrl: "https://horseholder.dev",
+  apiKey: process.env.HORSEHOLDER_API_KEY,
+});
 
 const storage = hhldr.group({
-  id: "storage",
+  id: "r2-storage",
   budgets: {
-    "r2-put-ops": {
+    "put-ops": {
       limit: 1_000_000,
-      warnings: [0.8],
-      renewal: renewal.monthly({ timezone: "America/Chicago" }),
+      renewal: renewal.monthly(),
+    },
+    "egress-bytes": {
+      limit: 50_000_000_000,
+      renewal: renewal.monthly(),
     },
   },
 });
 
-const result = await storage.charge({ "r2-put-ops": 1 }, { idempotencyKey: uploadId });
-if (!result.ok) {
-  console.warn(`blocked, retry in ${result.retryAfter}s`);
+const ok = await storage.charge(
+  { 
+    "put-ops": 1, 
+    "egress-bytes": object.size 
+  },
+  { idempotencyKey: uploadId },
+);
+
+if (!ok.ok) {
+  return tooExpensive({ retryAfter: ok.retryAfter });
+}
+
+await bucket.put(key, object);
+```
+
+Both budgets go through, or neither does.
+
+Running out is a returned value, not a thrown error. Being told no is the whole reason you called.
+
+No setup call. No migration. Limits ride along with every draw, so changing one is changing a constant.
+
+> [!NOTE]
+> Modifying a budget's limit does not reset the current usage, but may trigger a warning or exceed if the new limit is lower than the current usage.
+
+## Lifetime caps
+
+Some budgets should never come back.
+
+```ts
+const trial = hhldr.group({
+  id: "trial",
+  budgets: {
+    // 100 free renders, ever. Not per month. Ever.
+    "renders": { limit: 100, renewal: renewal.never() },
+  },
+});
+```
+
+`renewsAt` comes back `null`, and so does `retryAfter`, because waiting will not help anyone.
+
+## Rate limits, stacked
+
+Windows reset on the clock rather than rolling continuously:
+
+```ts
+const api = hhldr.group({
+  id: "api-calls",
+  budgets: {
+    "per-minute": { limit: 60, renewal: renewal.seconds(60) },
+    "per-hour": { limit: 1_000, renewal: renewal.seconds(3_600) },
+    "per-day": { limit: 10_000, renewal: renewal.daily({ timezone: "America/Chicago" }) },
+  },
+});
+
+// One call. Trips on whichever wall it hits first.
+const burst = await api.charge(
+  { "per-minute": 1, "per-hour": 1, "per-day": 1 },
+  { idempotencyKey: requestId },
+);
+
+if (!burst.ok) {
+  return rateLimited({
+    retryAfter: burst.retryAfter,
+    hit: burst.exceeded.map((b) => b.id), // ["per-minute"]
+  });
 }
 ```
 
-A `402` is a returned value rather than a thrown error, because running out of budget is the
-protocol working as designed. See [client/ts/README.md](client/ts/README.md) for reservations,
-tenants, retries, and errors, and [examples/](examples/) for seven runnable examples: `make dev`
-in one terminal, `make example` in another.
+## One budget per customer
 
-## Implementation choices
+`tenant()` re-points the same group at somebody else. Same declaration, same connection, separate money.
 
-The protocol leaves some values to the implementation. Ours:
+```ts
+const ci = hhldr.group({
+  id: "ci-builds",
+  budgets: {
+    "build-minutes": { limit: 500, renewal: renewal.monthly() },
+  },
+});
 
-| Choice                  | Value                                                |
-| ----------------------- | ---------------------------------------------------- |
-| Authentication          | Bearer API key, SHA-256 hashed in KV, one scope each |
-| Default reservation TTL | 300 seconds                                          |
-| Maximum reservation TTL | 86,400 seconds                                       |
-| Idempotency retention   | 24 hours                                             |
-| Settled hold retention  | 24 hours, so a repeat settle can replay              |
-| Budgets per draw        | 16                                                   |
+const cmpgn1 = ci.tenant("vox machina");
+const cmpgn2 = ci.tenant("mighty nein");
 
-Expiry, renewal, and reclamation are all driven off deadline heaps rather than timers, so they
-happen as a consequence of the next request rather than on a schedule. An idle group costs
-nothing and a busy one pays only for what actually came due. Idempotency records are the one
-thing not held in memory: they are looked up by exact key and never enumerated, so keeping a
-day of them resident would tie cold-start latency to traffic instead of to the number of
-budgets.
+await cmpgn1.charge({ "build-minutes": 12 }, { idempotencyKey: "build-1187" });
+await cmpgn2.charge({ "build-minutes": 3 }, { idempotencyKey: "build-2043" });
+// 500 each. They have never met.
+```
 
-## The conformance suite
+Groups are pure, so per-plan limits are just code:
 
-[tests/spec/](tests/spec/) is a standalone suite that speaks only HTTP, one file per area of the
-protocol. Nothing in it references API keys, KV, or Durable Objects; it imports only the two
-scaffolding files beside it:
+```ts
+const limits = { free: 100, pro: 5_000, enterprise: 1_000_000 };
 
-| File                                 | Does                                            |
-| ------------------------------------ | ----------------------------------------------- |
-| [tests/setup.ts](tests/setup.ts)     | Starts a server for the run, or defers to a URL |
-| [tests/harness.ts](tests/harness.ts) | Mints a fresh scope on it                       |
-| [tests/client.ts](tests/client.ts)   | The request vocabulary the tests are written in |
+const seats = hhldr.group({
+  id: "seats",
+  budgets: {
+    "api-calls": { limit: limits[customer.plan], renewal: renewal.monthly() },
+  },
+});
 
-The first two are the whole of what is implementation-specific.
+const quota = seats.tenant(customer.id);
+```
 
-By default `make test-spec` boots our server with `wrangler dev` on port 8799 and runs against
-it. Point it at any other Horse Holder implementation instead:
+## Warning thresholds
+
+Thresholds fire on the way up, once per period.
+
+```ts
+const mail = hhldr.group({
+  id: "email",
+  budgets: {
+    "sends": {
+      limit: 200_000,
+      warnings: [0.5, 0.8, 0.95],
+      renewal: renewal.monthly(),
+    },
+  },
+});
+
+const sent = await mail.charge({ "sends": batch.length }, { idempotencyKey: batchId });
+
+if (sent.ok) {
+  for (const { id, thresholds } of sent.warningsCrossed) {
+    await page(`${id} crossed ${thresholds.join(", ")}`);
+  }
+}
+```
+
+Each threshold fires once per period. Usage bouncing around 80% pages you once, not forty times.
+
+One big draw jumping 40% to 90% reports both `0.5` and `0.8`, so nothing gets skipped either.
+
+## Reserve now, settle later
+
+```ts
+const lease = await storage.reserve(
+  { "egress-bytes": estimate },
+  { idempotencyKey: jobId, ttlSeconds: 60 },
+);
+
+if (!lease.ok) return;
+
+try {
+  const actual = await streamItAll();
+  await lease.commit({ "egress-bytes": actual.bytes }); // over refunds, under gets checked
+} catch (err) {
+  await lease.release();
+  throw err;
+}
+```
+
+Crash before either one and the hold expires by itself. Your capacity comes home.
+
+The lease knows what it held, in the type:
+
+```ts
+await lease.commit({ "put-ops": 1 }); // compile error, that was never reserved
+```
+
+## Errors and retries
+
+```ts
+import { isHorseHolderError } from "@horse-holder/client";
+
+try {
+  await lease.commit();
+} catch (error) {
+  if (isHorseHolderError(error) && error.code === "reservation_not_found") {
+    // hold expired, treat it as unbudgeted and start over
+  }
+  throw error;
+}
+```
+
+Network blips, `429`, and `5xx` retry themselves with backoff. A `402` never does, because that is an answer, not a failure.
+
+Your idempotency keys make the retries safe. Generate one per operation, not per attempt.
+
+More in [examples/ts](examples/ts): seven runnable files, seven different services, each one asserts its own outcome.
+
+## Self Horse-ing
+
+Two ways to hold your own horses.
+
+### 1. Run this implementation
+
+[api/](api/) is standalone. Cloudflare Workers plus Durable Objects, one object per group, so two draws on the same budgets cannot race each other.
 
 ```bash
-HH_BASE_URL=https://budgets.example.com make test-spec
+git clone https://github.com/bens-schreiber/horse-holder
+cd horse-holder && pnpm install
+
+make dev    # localhost:8787
+make test   # conformance suite plus our own
+make check  # types, format, lint, both suites
 ```
+
+Ship it to your own account:
+
+```bash
+cd api
+pnpm wrangler kv namespace create API_KEYS   # put the id in wrangler.jsonc
+pnpm wrangler deploy
+```
+
+That deploys the API and nothing else. No file in `api/` imports from `site/`.
+
+Then point any client at it:
+
+```ts
+const hhldr = new HorseHolderClient({ baseUrl: "https://your-worker.workers.dev" });
+```
+
+Free tier holds a lot of horses.
+
+### 2. Write your own
+
+A full description of how to conform to the Horse Holder protocol can be found in [spec/spec.md](spec/spec.md), and an OpenAPI schema found in [spec/openapi.yaml](spec/openapi.yaml).
+
+| Endpoint | Does |
+| --- | --- |
+| `POST /v1/charge` | Spend now, atomically, across up to 16 budgets |
+| `POST /v1/reserve` | Hold capacity when the cost is not known yet |
+| `POST /v1/commit` | Settle a hold, correcting the amount if you like |
+| `POST /v1/release` | Give a hold back unspent |
+| `GET /v1/budget` | Read the whole group at one instant |
+
+The bar for conforming is [tests/spec/](tests/spec/), which is implementation-agnostic on purpose. Point it at your server. If it passes, you conform.
+
+**Every Horse Holder client works with your implementation.** Swap `baseUrl`, keep your code. The client in [client/ts](client/ts) knows the five endpoints and knows nothing about accounts, keys, or storage, so porting it to your server is a one-line change.
+
+## License
+
+[MIT](LICENSE). Go hold whatever horses you like.

@@ -1,0 +1,840 @@
+openapi: 3.1.0
+
+info:
+  title: Horse Holder Protocol
+  version: "1.0.0"
+  summary: Pre-flight budget enforcement over HTTP.
+  description: |
+    Setting spending limits and drawing against them *before* a metered operation happens.
+
+    Every budget is identified by the tuple `(scope, tenant, group, id)`. Scope comes from the
+    credential and is never named by the caller. Tenant and group travel in headers. Budget
+    definitions travel inline with every draw, so there is no create-budget call.
+
+    A group is the atomicity domain: budgets in one group are drawn together or not at all, and
+    a draw cannot span groups because there is no way to express one.
+
+    See the normative specification for the reasoning behind all of it.
+  license:
+    name: MIT
+    identifier: MIT
+  x-normative-spec: https://github.com/bschreib/horse-holder/blob/main/spec/spec.md
+
+servers:
+  - url: https://horseholder.dev/v1
+    description: The hosted instance.
+  - url: http://localhost:8787/v1
+    description: A local `make dev`.
+  - url: "{baseUrl}/v1"
+    description: Any conforming implementation.
+    variables:
+      baseUrl:
+        default: https://horseholder.dev
+
+security:
+  - bearerAuth: []
+  - {}
+
+tags:
+  - name: draws
+    description: Requests that decrease available capacity.
+  - name: settlement
+    description: Finalizing or returning a reservation's hold.
+  - name: reads
+    description: Requests that change nothing.
+
+paths:
+  /charge:
+    post:
+      tags: [draws]
+      operationId: charge
+      summary: Consume capacity immediately
+      description: |
+        Immediately and atomically consume capacity from one or more budgets in a group.
+
+        All-or-nothing: if any named budget lacks capacity, nothing is applied to any of them
+        and the response is `402`.
+      parameters:
+        - $ref: "#/components/parameters/Group"
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DrawRequest"
+            examples:
+              multiBudget:
+                summary: One upload drawing on two budgets at once
+                value:
+                  budgets:
+                    - id: r2-put-ops
+                      amount: 1
+                      definition:
+                        limit: 1000000
+                        warnings: [0.5, 0.8, 0.95]
+                        renewal: { type: calendar, unit: month, timezone: America/Chicago }
+                    - id: r2-storage-bytes
+                      amount: 4096
+                      definition:
+                        limit: 10000000000
+                        warnings: [0.9]
+                        renewal: { type: calendar, unit: month, timezone: America/Chicago }
+      responses:
+        "200":
+          $ref: "#/components/responses/DrawApplied"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "402":
+          $ref: "#/components/responses/BudgetExceeded"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/DrawConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /reserve:
+    post:
+      tags: [draws]
+      operationId: reserve
+      summary: Hold capacity for an operation whose cost is not yet known
+      description: |
+        Held amounts count toward `used` immediately. Settle the hold later with `/commit` or
+        `/release`; an expired hold returns its capacity on its own.
+
+        Failure semantics are identical to `/charge`.
+      parameters:
+        - $ref: "#/components/parameters/Group"
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/TtlSeconds"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DrawRequest"
+      responses:
+        "200":
+          description: The hold was placed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReserveResponse"
+              example:
+                reservationId: rsv_01J9X2K4M5N6P7Q8R9S0T1U2V3
+                expiresAt: "2026-08-15T14:32:05Z"
+                budgets:
+                  - id: r2-storage-bytes
+                    requested: 4096
+                    exceeded: false
+                    limit: 10000000000
+                    used: 9100004096
+                    remaining: 899995904
+                    renewsAt: "2026-09-01T05:00:00Z"
+                    warningsCrossed: [0.9]
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "402":
+          $ref: "#/components/responses/BudgetExceeded"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/DrawConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /commit:
+    post:
+      tags: [settlement]
+      operationId: commit
+      summary: Finalize a reservation
+      description: |
+        Optionally correct the amounts. Any budget from the original reservation left out of the
+        body commits at its reserved amount: omission means "the estimate was right", never
+        "release this one".
+
+        A correction lower than the reserved amount returns the difference. Higher is evaluated
+        as a fresh draw and may fail, in which case nothing is applied and the reservation stays
+        open.
+
+        Committing an already-committed reservation returns the original result, so
+        `idempotency-key` is not required here.
+      parameters:
+        - $ref: "#/components/parameters/Group"
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/ReservationId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommitRequest"
+            example:
+              budgets:
+                - id: r2-storage-bytes
+                  amount: 3812
+      responses:
+        "200":
+          $ref: "#/components/responses/DrawApplied"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "402":
+          $ref: "#/components/responses/BudgetExceeded"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ReservationNotFound"
+        "409":
+          $ref: "#/components/responses/SettlementConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /release:
+    post:
+      tags: [settlement]
+      operationId: release
+      summary: Return a reservation's hold without spending it
+      description: |
+        Nothing is drawn, so every entry in the response carries `requested: 0` and an empty
+        `warningsCrossed`. Releasing an already-released reservation returns `200`.
+      parameters:
+        - $ref: "#/components/parameters/Group"
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/ReservationId"
+      responses:
+        "200":
+          $ref: "#/components/responses/DrawApplied"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ReservationNotFound"
+        "409":
+          $ref: "#/components/responses/SettlementConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /budget:
+    get:
+      tags: [reads]
+      operationId: readGroup
+      summary: Read the whole group without drawing
+      description: |
+        Returns every budget in the `(scope, tenant, group)` triple, all reflecting the same
+        instant. There is no per-budget read: callers wanting one budget filter client-side.
+
+        An empty array means nothing in this group has been drawn against yet. That is not an
+        error, and this endpoint never returns `404`.
+      parameters:
+        - $ref: "#/components/parameters/Group"
+        - $ref: "#/components/parameters/Tenant"
+      responses:
+        "200":
+          description: The group's current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadResponse"
+              example:
+                budgets:
+                  - id: r2-put-ops
+                    limit: 1000000
+                    used: 412003
+                    remaining: 587997
+                    renewsAt: "2026-09-01T05:00:00Z"
+                  - id: r2-storage-bytes
+                    limit: 10000000000
+                    used: 9100000000
+                    remaining: 900000000
+                    renewsAt: "2026-09-01T05:00:00Z"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        The scheme is implementation-defined; only the placement is fixed. A conforming server
+        requiring credentials MUST accept them in `authorization` and MUST NOT require them
+        anywhere else. A server that does not authenticate MUST ignore the header rather than
+        reject it, which is what lets one client work against every implementation.
+
+  parameters:
+    Group:
+      name: hh-group
+      in: header
+      required: true
+      description: |
+        The atomicity domain for this request. Part of every budget's identity, so the same
+        budget id under two groups is two independent budgets. There is no default.
+      schema:
+        $ref: "#/components/schemas/Identifier"
+      example: r2-storage
+
+    Tenant:
+      name: hh-tenant
+      in: header
+      required: false
+      description: |
+        A caller-defined subdivision within the scope, opaque to the server.
+
+        An absent header and an empty-valued header identify **different** budgets: absent means
+        the scope's default tenant, empty is an ordinary tenant named `""`. Implementations must
+        check presence rather than testing the value for emptiness.
+      schema:
+        type: string
+        pattern: "^([A-Za-z0-9_.-]{1,128})?$"
+      example: acme
+
+    IdempotencyKey:
+      name: idempotency-key
+      in: header
+      required: true
+      description: |
+        Deduplicates retries. The identity is `(scope, tenant, group, endpoint, key)`.
+
+        Generate one key per logical operation and reuse it across attempts. Only the budget ids
+        and amounts are compared; `definition` is excluded, so deploying a limit change mid
+        flight does not turn a retry into a conflict. Failed (`402`) draws record nothing.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+      example: upload-3f1c9a2e
+
+    TtlSeconds:
+      name: hh-ttl-seconds
+      in: header
+      required: false
+      description: |
+        Hold lifetime. Implementations must document their default, should default to 300, and
+        must support at least 86400. Keep it short relative to the renewal period.
+      schema:
+        type: integer
+        minimum: 1
+      example: 60
+
+    ReservationId:
+      name: hh-reservation-id
+      in: header
+      required: true
+      description: The reservation being settled, as returned by `/reserve`.
+      schema:
+        type: string
+        minLength: 1
+      example: rsv_01J9X2K4M5N6P7Q8R9S0T1U2V3
+
+  headers:
+    RetryAfter:
+      description: |
+        Seconds until the earliest renewal among the budgets with `exceeded: true`. Omitted when
+        every one of them is a `never` budget, since waiting will not help.
+      schema:
+        type: integer
+        minimum: 0
+    WWWAuthenticate:
+      description: The scheme the server wants.
+      schema:
+        type: string
+
+  schemas:
+    Identifier:
+      type: string
+      pattern: "^[A-Za-z0-9_.-]{1,128}$"
+      description: |
+        Budget ids and groups. The charset keeps composite key derivation injective: with
+        arbitrary characters, tenant `a::b` + budget `c` could collide with tenant `a` + budget
+        `b::c`, which is cross-tenant access obtained by naming alone.
+
+    Amount:
+      type: number
+      minimum: 0
+      description: |
+        Finite and non-negative, with at least 53-bit integer precision supported. Prefer
+        integers in the smallest meaningful unit (bytes, op counts, hundredths of a cent) over
+        floats, so rounding does not accumulate across many small draws.
+
+    Timestamp:
+      type: string
+      format: date-time
+      description: RFC 3339 in UTC.
+      examples: ["2026-09-01T05:00:00Z"]
+
+    RenewalNever:
+      type: object
+      description: A lifetime cap. Usage accumulates forever and `renewsAt` is null.
+      required: [type]
+      additionalProperties: false
+      properties:
+        type:
+          const: never
+
+    RenewalInterval:
+      type: object
+      description: |
+        Fixed-duration windows tiled forward from `anchor`. Tumbling, not sliding: usage resets
+        to zero at each boundary. Compose several durations to approximate smoothing.
+      required: [type, seconds]
+      additionalProperties: false
+      properties:
+        type:
+          const: interval
+        seconds:
+          type: integer
+          minimum: 1
+        anchor:
+          $ref: "#/components/schemas/Timestamp"
+
+    RenewalCalendar:
+      type: object
+      description: |
+        Boundaries aligned to civil calendar units in a named timezone.
+
+        Month-end clamps to the last day of a short month and returns to the original day after,
+        rather than permanently drifting. A boundary in a spring-forward gap resolves to the
+        first valid instant after it; one in a fall-back overlap resolves to the first
+        occurrence.
+      required: [type, unit]
+      additionalProperties: false
+      properties:
+        type:
+          const: calendar
+        unit:
+          type: string
+          enum: [day, week, month, year]
+        interval:
+          type: integer
+          minimum: 1
+          default: 1
+        timezone:
+          type: string
+          default: UTC
+          description: IANA timezone name. Determines whose midnight is meant.
+          examples: ["America/Chicago"]
+        anchor:
+          allOf:
+            - $ref: "#/components/schemas/Timestamp"
+          description: |
+            Sets the phase: day of month, weekday, or month of year. Defaults to the natural
+            start of the unit.
+
+    Renewal:
+      description: A tagged union of the three renewal rules.
+      discriminator:
+        propertyName: type
+        mapping:
+          never: "#/components/schemas/RenewalNever"
+          interval: "#/components/schemas/RenewalInterval"
+          calendar: "#/components/schemas/RenewalCalendar"
+      oneOf:
+        - $ref: "#/components/schemas/RenewalNever"
+        - $ref: "#/components/schemas/RenewalInterval"
+        - $ref: "#/components/schemas/RenewalCalendar"
+
+    Definition:
+      type: object
+      description: |
+        A budget's configuration, sent inline with every draw. Reconciled before the draw is
+        evaluated, and reconciliation never resets usage: lowering a limit below current usage
+        is legal and simply exhausts the budget.
+
+        An unrecognized field is rejected with `400`, so a misspelled `limitt` cannot leave a
+        caller believing a limit is enforced when it is not.
+      required: [limit, renewal]
+      additionalProperties: false
+      properties:
+        limit:
+          type: number
+          exclusiveMinimum: 0
+          description: |
+            Positive. Zero is rejected because thresholds are `used / limit`, and the result of
+            dividing by zero varies by language. To block everything, use a limit of 1.
+        renewal:
+          $ref: "#/components/schemas/Renewal"
+        warnings:
+          type: array
+          default: []
+          maxItems: 32
+          items:
+            type: number
+            exclusiveMinimum: 0
+            exclusiveMaximum: 1
+          description: |
+            Fractions strictly between 0 and 1. `1.0` is the limit, not a warning.
+          examples: [[0.5, 0.8, 0.95]]
+
+    DrawBudget:
+      type: object
+      required: [id, amount, definition]
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/Identifier"
+        amount:
+          $ref: "#/components/schemas/Amount"
+        definition:
+          $ref: "#/components/schemas/Definition"
+
+    DrawRequest:
+      type: object
+      required: [budgets]
+      additionalProperties: false
+      properties:
+        budgets:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items:
+            $ref: "#/components/schemas/DrawBudget"
+          description: |
+            Ids must be unique within the request. A duplicate is rejected with `400` rather
+            than silently summed, since it almost always means a caller-side bug.
+
+    CommitBudget:
+      type: object
+      required: [id, amount]
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/Identifier"
+        amount:
+          $ref: "#/components/schemas/Amount"
+
+    CommitRequest:
+      type: object
+      required: [budgets]
+      additionalProperties: false
+      properties:
+        budgets:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items:
+            $ref: "#/components/schemas/CommitBudget"
+          description: |
+            Corrections only. Introducing a budget id absent from the original reservation is a
+            draw with no capacity check behind it, and is rejected with `400`.
+
+    BudgetOutcome:
+      type: object
+      description: One budget's state after a draw, commit, or release.
+      required: [id, requested, exceeded, limit, used, remaining, renewsAt, warningsCrossed]
+      properties:
+        id:
+          $ref: "#/components/schemas/Identifier"
+        requested:
+          allOf:
+            - $ref: "#/components/schemas/Amount"
+          description: |
+            What this request drew from this budget. `0` for budgets in the group the request
+            never named, and for every entry on a release.
+        exceeded:
+          type: boolean
+          description: |
+            True for **every** budget that lacked capacity, not just the first one found.
+        limit:
+          type: number
+          exclusiveMinimum: 0
+        used:
+          $ref: "#/components/schemas/Amount"
+        remaining:
+          allOf:
+            - $ref: "#/components/schemas/Amount"
+          description: "`max(0, limit - used)`."
+        renewsAt:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+          description: Null for `never` budgets.
+        warningsCrossed:
+          type: array
+          items:
+            type: number
+            exclusiveMinimum: 0
+            exclusiveMaximum: 1
+          description: |
+            Thresholds above the period's previous high-water mark and at or below the new
+            usage fraction, ascending. The mark never decreases on a release or a downward
+            commit, so a budget hovering near a threshold does not re-fire it. It resets only on
+            renewal and on a change to `limit`.
+
+    BudgetState:
+      type: object
+      description: One budget as reported by a read, with the draw-specific fields omitted.
+      required: [id, limit, used, remaining, renewsAt]
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/Identifier"
+        limit:
+          type: number
+          exclusiveMinimum: 0
+        used:
+          $ref: "#/components/schemas/Amount"
+        remaining:
+          $ref: "#/components/schemas/Amount"
+        renewsAt:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+
+    GroupOutcome:
+      type: array
+      description: |
+        **Every** budget in the group, not only the ones the request named, ordered
+        lexicographically by id. Same shape and same ordering on `402` as on `200`, so one
+        decoder handles both and a caller branches on the status alone.
+      items:
+        $ref: "#/components/schemas/BudgetOutcome"
+
+    DrawResponse:
+      type: object
+      required: [budgets]
+      properties:
+        budgets:
+          $ref: "#/components/schemas/GroupOutcome"
+
+    ReserveResponse:
+      type: object
+      required: [reservationId, expiresAt, budgets]
+      properties:
+        reservationId:
+          type: string
+          examples: ["rsv_01J9X2K4M5N6P7Q8R9S0T1U2V3"]
+        expiresAt:
+          $ref: "#/components/schemas/Timestamp"
+        budgets:
+          $ref: "#/components/schemas/GroupOutcome"
+
+    ReadResponse:
+      type: object
+      required: [budgets]
+      additionalProperties: false
+      properties:
+        budgets:
+          type: array
+          description: |
+            One entry per budget in the group, ordered lexicographically by id, all reflecting
+            the same instant. Empty when nothing here has been drawn against yet.
+          items:
+            $ref: "#/components/schemas/BudgetState"
+
+    ErrorCode:
+      type: string
+      description: A stable machine-readable string. Implementations may define their own.
+      enum:
+        - invalid_request
+        - unauthenticated
+        - forbidden
+        - reservation_not_found
+        - budget_exceeded
+        - idempotency_conflict
+        - idempotency_in_progress
+        - reservation_settled
+        - budget_group_conflict
+        - internal_error
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              $ref: "#/components/schemas/ErrorCode"
+            message:
+              type: string
+              description: For humans. Must not be parsed.
+
+    ExceededError:
+      description: |
+        The `402` body. `budgets` is a sibling of `error`, not nested inside it, so the decoder
+        reading `budgets` on a `200` reads the identical field here.
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          required: [budgets]
+          properties:
+            budgets:
+              $ref: "#/components/schemas/GroupOutcome"
+
+  responses:
+    DrawApplied:
+      description: Applied. The body reports the whole group's state afterward.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/DrawResponse"
+          example:
+            budgets:
+              - id: r2-put-ops
+                requested: 1
+                exceeded: false
+                limit: 1000000
+                used: 412003
+                remaining: 587997
+                renewsAt: "2026-09-01T05:00:00Z"
+                warningsCrossed: []
+              - id: r2-storage-bytes
+                requested: 4096
+                exceeded: false
+                limit: 10000000000
+                used: 9100000000
+                remaining: 900000000
+                renewsAt: "2026-09-01T05:00:00Z"
+                warningsCrossed: [0.9]
+
+    BudgetExceeded:
+      description: |
+        At least one named budget lacked capacity. **Nothing was applied to any budget**, so
+        `used` and `remaining` reflect state without the requested draw and every
+        `warningsCrossed` is empty.
+
+        The `message` counts only the budgets the request named: a draw against 1 budget inside
+        a group of 5 reports `1 of 1`.
+      headers:
+        retry-after:
+          $ref: "#/components/headers/RetryAfter"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ExceededError"
+          example:
+            error:
+              code: budget_exceeded
+              message: 1 of 2 budgets lacked capacity
+            budgets:
+              - id: r2-put-ops
+                requested: 1
+                exceeded: false
+                limit: 1000000
+                used: 412002
+                remaining: 587998
+                renewsAt: "2026-09-01T05:00:00Z"
+                warningsCrossed: []
+              - id: r2-storage-bytes
+                requested: 4096
+                exceeded: true
+                limit: 10000000000
+                used: 9999999000
+                remaining: 1000
+                renewsAt: "2026-09-01T05:00:00Z"
+                warningsCrossed: []
+
+    InvalidRequest:
+      description: |
+        Malformed body, missing field, unknown definition field, negative amount, zero or
+        negative limit, duplicate budget id, more than 16 budgets, missing `hh-group`, or an
+        identifier failing the charset rules.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: invalid_request
+              message: hh-group is required
+
+    Unauthenticated:
+      description: |
+        Missing or invalid credentials. Resolved before any other validation, so this takes
+        precedence over `400`, and such a request draws nothing and consumes no idempotency key.
+      headers:
+        www-authenticate:
+          $ref: "#/components/headers/WWWAuthenticate"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: unauthenticated
+              message: Missing or invalid API key
+
+    Forbidden:
+      description: Valid credentials, insufficient access. Also takes precedence over `400`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: forbidden
+              message: This key cannot access that
+
+    ReservationNotFound:
+      description: |
+        Unknown or expired reservation. An expired hold is `404` rather than `410`: its capacity
+        is already back, and the caller's correct move is to treat the operation as unbudgeted
+        and start over.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: reservation_not_found
+              message: No such reservation
+
+    DrawConflict:
+      description: |
+        `idempotency_conflict` when the key was reused with a materially different body, or
+        `idempotency_in_progress` when an identical key is still in flight.
+
+        `budget_group_conflict` is OPTIONAL, from implementations that keep a scope-level index
+        of budget ids to groups.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: idempotency_conflict
+              message: That key was used with different amounts
+
+    SettlementConflict:
+      description: |
+        `reservation_settled`: the reservation is already in the opposing terminal state.
+        Committing a released hold, or releasing a committed one, is a caller-side logic error.
+        Repeating the *same* settlement is not, and returns `200`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: reservation_settled
+              message: That reservation was already released
+
+    InternalError:
+      description: Unexpected server failure.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: internal_error
+              message: Something broke on our end
