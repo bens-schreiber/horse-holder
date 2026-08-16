@@ -2,3 +2,4 @@ node_modules/
 .wrangler/
 api/worker-configuration.d.ts
 *.log
+client/ts/dist/

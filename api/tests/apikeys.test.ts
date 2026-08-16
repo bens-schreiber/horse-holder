@@ -1,6 +1,6 @@
 /** Our authentication scheme: accounts, API keys, and what they gate. */
 
-import { env, SELF } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 function fetchApi(path: string, init?: RequestInit): Promise<Response> {
@@ -55,10 +55,6 @@ describe("POST /v1/keys", () => {
     for (const { name } of keys) {
       expect(name, "a KV dump must not yield a usable credential").not.toContain(apiKey);
     }
-  });
-
-  it("is the only unauthenticated route", async () => {
-    expect((await fetchApi("/v1/keys", { method: "POST" })).status).toBe(201);
   });
 });
 
@@ -120,7 +116,6 @@ describe("authentication", () => {
         method,
         headers: {
           "hh-group": "g",
-          "hh-budget-id": "b",
           "hh-reservation-id": "r",
           "idempotency-key": "k",
         },

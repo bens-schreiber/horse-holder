@@ -1,12 +1,21 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript", "promise"],
+  "plugins": ["typescript", "promise", "import"],
   "categories": {
     "correctness": "error",
-    "suspicious": "error"
+    "suspicious": "error",
+    "perf": "error"
   },
   "rules": {
-    "curly": ["error", "all"]
+    "curly": ["error", "all"],
+    "import/no-duplicates": "error",
+    "sort-imports": ["error", { "ignoreDeclarationSort": true }],
+    "no-await-in-loop": "off"
   },
-  "ignorePatterns": ["**/worker-configuration.d.ts", "**/node_modules/**", "**/.wrangler/**"]
+  "ignorePatterns": [
+    "**/worker-configuration.d.ts",
+    "**/node_modules/**",
+    "**/.wrangler/**",
+    "**/dist/**"
+  ]
 }

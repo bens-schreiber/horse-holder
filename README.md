@@ -1,41 +1,51 @@
 # Horse Holder
 
-A conforming [Horse Holder v1](spec/spec.md) server — pre-flight budget enforcement over
-HTTP — on Cloudflare Workers and Durable Objects.
+A conforming [Horse Holder v1](spec/spec.md) server: pre-flight budget enforcement over HTTP,
+on Cloudflare Workers and Durable Objects.
 
-One Durable Object per `(scope, tenant, group)` triple, which is the transactional unit §8.1
-recommends, so the protocol's atomicity requirements hold structurally rather than by careful
-request handling. The Worker validates every request and reaches the storage tier only by
-typed RPC, so nothing downstream re-parses the wire format.
+One Durable Object per `(scope, tenant, group)` triple. That triple is the protocol's atomicity
+domain, so making it the transactional unit means all-or-nothing holds structurally rather than
+by careful request handling: a draw cannot span two objects, and inside one there is no
+concurrency for a check-and-decrement to lose to. The Worker validates every request and reaches
+the storage tier only by typed RPC, so nothing downstream re-parses the wire format.
 
 ## Layout
 
 ```
 api/src/index.ts       Worker: routing, validation, and RPC dispatch
-api/src/auth.ts        Our §9 extension: bearer API keys, one scope each
+api/src/auth.ts        Bearer API keys, one scope each
 api/src/budget.ts      BudgetGroup DO: all protocol semantics, reached by RPC
+api/src/expiry.ts      The deadline heap that drives expiry, renewal, and reclamation
 api/src/schema.ts      Headers, paths, codes, zod request schemas, error envelope
 api/src/renewal.ts     Renewal rules and their boundary math (timezones, DST, clamping)
-tests/spec/            Protocol conformance suite — implementation-agnostic
-tests/*.ts             Its scaffolding: server setup, harness, HTTP client
-api/tests/impl/        Our extensions and internals
-docs/                  Documented values and interpretations
+api/tests/             Our extensions and internals
+tests/spec/            Protocol conformance suite, implementation-agnostic
+tests/*.ts             Its scaffolding: server setup, harness, request vocabulary
+client/ts/             TypeScript client for the protocol, vendor-neutral, zero deps
+examples/ts/           Runnable client examples, one per file, nothing else
+tests/examples/        The driver that runs them and asserts they pass
 ```
+
+`examples/ts` deliberately sits outside every workspace package, so that an example reads
+exactly like calling code in someone else's project. That is why the root `package.json`
+depends on `@horse-holder/client`: it is what resolves the import for those files.
 
 ## Commands
 
 Everything runs from the `Makefile` at the repo root; there is no `scripts` block in any
 `package.json`.
 
-| Command          | Does                                                                     |
-| ---------------- | ------------------------------------------------------------------------ |
-| `make test`      | Both suites (the default target)                                         |
-| `make test-spec` | Conformance suite only                                                   |
-| `make test-impl` | Implementation suite only                                                |
-| `make check`     | Types, format, lint, typecheck, and both suites — the definition of done |
-| `make dev`       | `wrangler dev`, for manual smoke testing                                 |
-| `make fmt`       | Format in place                                                          |
-| `make watch`     | Tests in watch mode                                                      |
+| Command             | Does                                                  |
+| ------------------- | ----------------------------------------------------- |
+| `make test`         | Both suites (the default target)                      |
+| `make test-spec`    | Conformance suite only                                |
+| `make test-impl`    | Implementation suite only                             |
+| `make check`        | Types, format, lint, typecheck, and both suites       |
+| `make dev`          | `wrangler dev` on port 8787, for manual smoke testing |
+| `make fmt`          | Format in place                                       |
+| `make watch`        | Tests in watch mode                                   |
+| `make build-client` | Build `@horse-holder/client` to `client/ts/dist`      |
+| `make example`      | Run the client examples against a live server         |
 
 ## Using it
 
@@ -55,26 +65,79 @@ curl -XPOST localhost:8787/v1/charge \
           "renewal":{"type":"calendar","unit":"month","timezone":"America/Chicago"}}}]}'
 ```
 
-See [docs/implementation-notes.md](docs/implementation-notes.md) for the TTL and retention
-values the spec requires us to publish, the authentication scheme, and the interpretations
-this server makes.
+### From TypeScript
+
+[client/ts/](client/ts/) is a zero-dependency client for the protocol. It is written against
+[the specification](spec/spec.md) rather than against this server, so it has no notion of
+`/v1/keys` or anything else this deployment adds on top, and pointing `baseUrl` at any
+conforming implementation is the whole of the porting effort.
+
+The client's primary object is a **group**, since a group is the atomicity domain and the only
+thing a request can address. Declare one with its budgets, then draw:
+
+```ts
+import { HorseHolderClient, renewal } from "@horse-holder/client";
+
+const hhldr = new HorseHolderClient({ baseUrl, apiKey });
+
+const storage = hhldr.group({
+  id: "storage",
+  budgets: {
+    "r2-put-ops": {
+      limit: 1_000_000,
+      warnings: [0.8],
+      renewal: renewal.monthly({ timezone: "America/Chicago" }),
+    },
+  },
+});
+
+const result = await storage.charge({ "r2-put-ops": 1 }, { idempotencyKey: uploadId });
+if (!result.ok) {
+  console.warn(`blocked, retry in ${result.retryAfter}s`);
+}
+```
+
+A `402` is a returned value rather than a thrown error, because running out of budget is the
+protocol working as designed. See [client/ts/README.md](client/ts/README.md) for reservations,
+tenants, retries, and errors, and [examples/](examples/) for seven runnable examples: `make dev`
+in one terminal, `make example` in another.
+
+## Implementation choices
+
+The protocol leaves some values to the implementation. Ours:
+
+| Choice                  | Value                                                |
+| ----------------------- | ---------------------------------------------------- |
+| Authentication          | Bearer API key, SHA-256 hashed in KV, one scope each |
+| Default reservation TTL | 300 seconds                                          |
+| Maximum reservation TTL | 86,400 seconds                                       |
+| Idempotency retention   | 24 hours                                             |
+| Settled hold retention  | 24 hours, so a repeat settle can replay              |
+| Budgets per draw        | 16                                                   |
+
+Expiry, renewal, and reclamation are all driven off deadline heaps rather than timers, so they
+happen as a consequence of the next request rather than on a schedule. An idle group costs
+nothing and a busy one pays only for what actually came due. Idempotency records are the one
+thing not held in memory: they are looked up by exact key and never enumerated, so keeping a
+day of them resident would tie cold-start latency to traffic instead of to the number of
+budgets.
 
 ## The conformance suite
 
-[tests/spec/](tests/spec/) is a standalone suite that speaks only HTTP, one file per spec
-section. Nothing in it references API keys, KV, or Durable Objects; it imports only the two
+[tests/spec/](tests/spec/) is a standalone suite that speaks only HTTP, one file per area of the
+protocol. Nothing in it references API keys, KV, or Durable Objects; it imports only the two
 scaffolding files beside it:
 
-| File                                 | Does                                             |
-| ------------------------------------ | ------------------------------------------------ |
-| [tests/setup.ts](tests/setup.ts)     | Starts a server for the run, or defers to an URL |
-| [tests/harness.ts](tests/harness.ts) | Mints a fresh scope on it                        |
-| [tests/client.ts](tests/client.ts)   | Headers of §2 and bodies of §5 — protocol only   |
+| File                                 | Does                                            |
+| ------------------------------------ | ----------------------------------------------- |
+| [tests/setup.ts](tests/setup.ts)     | Starts a server for the run, or defers to a URL |
+| [tests/harness.ts](tests/harness.ts) | Mints a fresh scope on it                       |
+| [tests/client.ts](tests/client.ts)   | The request vocabulary the tests are written in |
 
 The first two are the whole of what is implementation-specific.
 
-By default `make test-spec` boots our server with `wrangler dev` and runs against it. Point
-it at any other Horse Holder implementation instead:
+By default `make test-spec` boots our server with `wrangler dev` on port 8799 and runs against
+it. Point it at any other Horse Holder implementation instead:
 
 ```bash
 HH_BASE_URL=https://budgets.example.com make test-spec

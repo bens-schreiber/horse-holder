@@ -6,7 +6,7 @@
  * defines.
  */
 
-import { env, SELF } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 async function newAccount(): Promise<string> {

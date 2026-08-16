@@ -33,6 +33,24 @@ export const Renewal = z.discriminatedUnion("type", [
 export type Renewal = z.infer<typeof Renewal>;
 type Unit = Extract<Renewal, { type: "calendar" }>["unit"];
 
+/**
+ * A rule's identity, for telling whether a submitted definition changed the one on record.
+ *
+ * Reconciliation asks that question for every budget on every draw, so it is worth not
+ * serializing two objects to answer it. The field order is fixed here rather than left to
+ * whatever order the two objects happen to carry.
+ */
+export function renewalKey(rule: Renewal): string {
+  switch (rule.type) {
+    case "never":
+      return "never";
+    case "interval":
+      return `interval:${rule.seconds}:${rule.anchor ?? ""}`;
+    case "calendar":
+      return `calendar:${rule.unit}:${rule.interval ?? 1}:${rule.timezone ?? "UTC"}:${rule.anchor ?? ""}`;
+  }
+}
+
 /** A civil (wall-clock) date-time in some timezone, with no offset attached. */
 interface Civil {
   year: number;

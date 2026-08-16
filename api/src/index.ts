@@ -6,6 +6,7 @@
  */
 
 import { Result } from "better-result";
+
 import { authenticate, issueKey } from "./auth.ts";
 import {
   ApiError,
@@ -15,14 +16,14 @@ import {
   GroupHeader,
   Header,
   IdempotencyKeyHeader,
-  parse,
-  parseHeader,
   Path,
   type Reply,
   RequiredHeader,
-  TenantHeader,
-  toResponse,
   ReservationTtlSecondsHeader,
+  TenantHeader,
+  parse,
+  parseHeader,
+  toResponse,
 } from "./schema.ts";
 
 export { BudgetGroup } from "./budget.ts";
@@ -85,20 +86,16 @@ function handle(request: Request, env: Env): Promise<Result<Reply, ApiError>> {
     }
 
     const group = yield* parseHeader(request, Header.Group, GroupHeader);
-    const tenant = yield* parse(
-      TenantHeader,
-      request.headers.get(Header.Tenant) ?? "",
-      Header.Tenant,
-    );
-    const hasTenant = request.headers.has(Header.Tenant);
-    const name = doName(accountId, hasTenant, tenant, group);
-    const budgets = env.BUDGETS.get(env.BUDGETS.idFromName(name));
+    // An absent `hh-tenant` and an empty one address different budgets, so presence is read
+    // rather than inferred from the retrieved value.
+    const tenant = request.headers.has(Header.Tenant)
+      ? yield* parse(TenantHeader, request.headers.get(Header.Tenant), Header.Tenant)
+      : null;
+    const budgets = env.BUDGETS.get(env.BUDGETS.idFromName(doName(accountId, tenant, group)));
 
     if (pathname === Path.Budget) {
-      // Read the state of a single budget.
-      const id = yield* parseHeader(request, Header.BudgetId, RequiredHeader);
-      const budget = await budgets.read(id);
-      return Result.ok(budget);
+      // Read every budget in the group, in one atomic look at the object.
+      return Result.ok(await budgets.read());
     }
 
     const body = yield* Result.await(readJson(request));
@@ -132,17 +129,10 @@ function handle(request: Request, env: Env): Promise<Result<Reply, ApiError>> {
 }
 
 /**
- * The Durable Object name for a `(scope, tenant, group)` triple.
- *
- * `:` is explicitly outside the identifier charset.
+ * The Durable Object name for a `(scope, tenant, group)` triple, where `null` is no tenant.
  */
-export function doName(
-  accountId: string,
-  tenantPresent: boolean,
-  tenant: string,
-  group: string,
-): string {
-  return `${accountId}:${tenantPresent ? "1" : "0"}:${tenant}:${group}`;
+export function doName(accountId: string, tenant: string | null, group: string): string {
+  return `${accountId}:${tenant === null ? "0:" : `1:${tenant}`}:${group}`;
 }
 
 async function readJson(request: Request): Promise<Result<unknown, ApiError>> {

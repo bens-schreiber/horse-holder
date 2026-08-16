@@ -1,34 +1,24 @@
 /** Renewal rules, observed through the wire protocol. */
 
 import { beforeAll, describe, expect, it } from "vitest";
-import { definition, entry, freshGroup, freshKey, post, readJson } from "../client.ts";
-import { harness } from "../harness.ts";
 
-let auth: Record<string, string>;
+import { type Scope, budgetsOf, definition, entry, freshGroup, scope, sleep } from "../client.ts";
+
+let api: Scope;
 beforeAll(async () => {
-  auth = await harness.newScope();
+  api = await scope();
 });
 
+/** Charges one budget under `renewal` and reports where usage and the boundary landed. */
 async function draw(
   group: string,
   amount: number,
   renewal: Record<string, unknown>,
   limit = 100,
 ): Promise<{ used: number; renewsAt: string | null }> {
-  const res = await post(
-    harness,
-    auth,
-    "/v1/charge",
-    {
-      budgets: [entry("b", amount, definition(limit, { renewal }))],
-    },
-    { group, key: freshKey() },
-  );
-  const body = await readJson<{ budgets: { used: number; renewsAt: string | null }[] }>(res);
-  return body.budgets[0]!;
+  const res = await api.charge({ group }, entry("put-ops", amount, definition(limit, { renewal })));
+  return (await budgetsOf<{ used: number; renewsAt: string | null }>(res))[0]!;
 }
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("never renewal", () => {
   it("reports a null renewsAt and accumulates indefinitely", async () => {
@@ -84,15 +74,8 @@ describe("interval renewal", () => {
 
     // Assert
     for (const seconds of [0, -60, 1.5]) {
-      const res = await post(
-        harness,
-        auth,
-        "/v1/charge",
-        {
-          budgets: [entry("b", 1, definition(10, { renewal: { type: "interval", seconds } }))],
-        },
-        { group, key: freshKey() },
-      );
+      const renewal = { type: "interval", seconds };
+      const res = await api.charge({ group }, entry("put-ops", 1, definition(10, { renewal })));
       expect(res.status, `seconds ${seconds}`).toBe(400);
     }
   });
@@ -104,10 +87,12 @@ describe("calendar renewal", () => {
     const { renewsAt } = await draw(freshGroup(), 1, { type: "calendar", unit: "month" });
 
     // Assert
-    const d = new Date(renewsAt!);
-    expect(d.getUTCDate()).toBe(1);
-    expect([d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()]).toEqual([0, 0, 0]);
-    expect(d.getTime()).toBeGreaterThan(Date.now());
+    const boundary = new Date(renewsAt!);
+    expect(boundary.getUTCDate()).toBe(1);
+    expect([boundary.getUTCHours(), boundary.getUTCMinutes(), boundary.getUTCSeconds()]).toEqual([
+      0, 0, 0,
+    ]);
+    expect(boundary.getTime()).toBeGreaterThan(Date.now());
   });
 
   it("honors a non-UTC timezone", async () => {
@@ -119,18 +104,18 @@ describe("calendar renewal", () => {
     });
 
     // Assert
-    const d = new Date(renewsAt!);
+    const boundary = new Date(renewsAt!);
     expect([5, 6], "Chicago midnight is 05:00 or 06:00 UTC depending on daylight saving").toContain(
-      d.getUTCHours(),
+      boundary.getUTCHours(),
     );
     const local = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/Chicago",
       day: "numeric",
       hour: "numeric",
       hourCycle: "h23",
-    }).formatToParts(d);
-    expect(local.find((p) => p.type === "day")!.value).toBe("1");
-    expect(Number(local.find((p) => p.type === "hour")!.value)).toBe(0);
+    }).formatToParts(boundary);
+    expect(local.find((part) => part.type === "day")!.value).toBe("1");
+    expect(Number(local.find((part) => part.type === "hour")!.value)).toBe(0);
   });
 
   it("keeps an anchor on the 31st rather than drifting to February's clamp", async () => {
@@ -142,10 +127,12 @@ describe("calendar renewal", () => {
     });
 
     // Assert
-    const d = new Date(renewsAt!);
-    const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+    const boundary = new Date(renewsAt!);
+    const lastDay = new Date(
+      Date.UTC(boundary.getUTCFullYear(), boundary.getUTCMonth() + 1, 0),
+    ).getUTCDate();
     expect(
-      d.getUTCDate(),
+      boundary.getUTCDate(),
       "the anchor day must be clamped per month, never carried forward as drift",
     ).toBe(Math.min(31, lastDay));
   });
@@ -154,14 +141,14 @@ describe("calendar renewal", () => {
     // Assert
     for (const unit of ["day", "week", "year"] as const) {
       const { renewsAt } = await draw(freshGroup(), 1, { type: "calendar", unit });
-      const d = new Date(renewsAt!);
-      expect(d.getTime(), unit).toBeGreaterThan(Date.now());
-      expect([d.getUTCHours(), d.getUTCMinutes()], unit).toEqual([0, 0]);
+      const boundary = new Date(renewsAt!);
+      expect(boundary.getTime(), unit).toBeGreaterThan(Date.now());
+      expect([boundary.getUTCHours(), boundary.getUTCMinutes()], unit).toEqual([0, 0]);
       if (unit === "week") {
-        expect(d.getUTCDay(), "weeks default to Monday").toBe(1);
+        expect(boundary.getUTCDay(), "weeks default to Monday").toBe(1);
       }
       if (unit === "year") {
-        expect([d.getUTCMonth(), d.getUTCDate()], unit).toEqual([0, 1]);
+        expect([boundary.getUTCMonth(), boundary.getUTCDate()], unit).toEqual([0, 1]);
       }
     }
   });
@@ -199,15 +186,7 @@ describe("calendar renewal", () => {
 
     // Assert
     for (const renewal of cases) {
-      const res = await post(
-        harness,
-        auth,
-        "/v1/charge",
-        {
-          budgets: [entry("b", 1, definition(10, { renewal }))],
-        },
-        { group, key: freshKey() },
-      );
+      const res = await api.charge({ group }, entry("put-ops", 1, definition(10, { renewal })));
       expect(res.status, JSON.stringify(renewal)).toBe(400);
     }
   });
@@ -221,15 +200,7 @@ describe("calendar renewal", () => {
       { type: "sliding", seconds: 60 },
       { type: "never", seconds: 60 },
     ]) {
-      const res = await post(
-        harness,
-        auth,
-        "/v1/charge",
-        {
-          budgets: [entry("b", 1, definition(10, { renewal }))],
-        },
-        { group, key: freshKey() },
-      );
+      const res = await api.charge({ group }, entry("put-ops", 1, definition(10, { renewal })));
       expect(res.status, JSON.stringify(renewal)).toBe(400);
     }
   });
@@ -243,15 +214,7 @@ describe("applying renewals", () => {
     await draw(group, 100, renewal);
 
     // Act
-    const blocked = await post(
-      harness,
-      auth,
-      "/v1/charge",
-      {
-        budgets: [entry("b", 1, definition(100, { renewal }))],
-      },
-      { group, key: freshKey() },
-    );
+    const blocked = await api.charge({ group }, entry("put-ops", 1, definition(100, { renewal })));
     await sleep(1100);
     const afterBoundary = await draw(group, 1, renewal);
 

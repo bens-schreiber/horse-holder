@@ -139,7 +139,6 @@ draw, which reintroduces exactly the shared bottleneck groups exist to remove.
 | `hh-tenant`         | request   | no                                       | Tenant for this request. Absent means the scope's default tenant.              |
 | `hh-group`          | request   | yes                                      | Atomicity domain for this request. No default.                                 |
 | `hh-reservation-id` | request   | on `/v1/commit`, `/v1/release`           | Identifies the reservation being settled.                                      |
-| `hh-budget-id`      | request   | on `GET /v1/budget`                      | Identifies the budget being read.                                              |
 | `hh-ttl-seconds`    | request   | no                                       | Reservation lifetime. `POST /v1/reserve` only.                                 |
 | `retry-after`       | response  | on `402`                                 | Standard HTTP header. Seconds until the earliest renewal among failed budgets. |
 
@@ -382,8 +381,8 @@ wanting to block all activity SHOULD use a limit of `1` with every draw costing 
 }
 ```
 
-`remaining` MUST be `max(0, limit - used)`. `renewsAt` is `null` for `never` budgets.
-Entries MUST appear in the same order as the request.
+`remaining` MUST be `max(0, limit - used)`. `renewsAt` is `null` for `never` budgets. Entries
+MUST be ordered lexicographically by `id`.
 
 **Response `402 Payment Required`** — At least one budget lacked capacity.
 **Nothing was applied to any budget.**
@@ -419,11 +418,32 @@ Entries MUST appear in the same order as the request.
 }
 ```
 
-#### Identifying which budgets blocked
+#### The response covers the whole group
 
-The `budgets` array MUST have **the same shape and the same ordering on `402` as on
-`200`**, listing every budget named in the request — not only the failures. A caller
-identifies what blocked by filtering on `exceeded`.
+The `budgets` array MUST list **every budget in the group**, not only the ones the request
+named. Budgets the request never drew from carry `requested: 0`, `exceeded: false`, and an
+empty `warningsCrossed`.
+
+The server holds the entire group in one transactional unit already (§8.1), so reporting all
+of it costs nothing and means every response is a complete, consistent picture of the
+atomicity domain at one instant. A caller never has to follow a draw with a read to find out
+where the rest of its budgets stand, and a client library can offer a total lookup over the
+group rather than one that may or may not have an answer.
+
+Because the array describes the group rather than the request, it is ordered by the group's
+own key: entries MUST appear in lexicographic `id` order, drawn and undrawn alike. Every
+response in this protocol therefore carries the same entries in the same order, whatever the
+endpoint and whatever the status, and two reads with no draw between them are byte-identical.
+Ordering drawn entries first would instead make the array's shape depend on which budgets a
+caller happened to name, which is the request-shaped framing this section replaces.
+
+A caller locates its own entries by `id`, or by filtering on `requested > 0` for the ones
+this request drew from. It identifies what blocked by filtering on `exceeded`; the array
+MUST have **the same shape and the same ordering on `402` as on `200`**.
+
+The `message` on a `402` counts only the budgets the request named — a draw against 1 budget
+inside a group of 5 reports `1 of 1`, never `1 of 5`. Budgets the request never touched did
+not participate in the failure and MUST NOT inflate the denominator.
 
 Two properties follow from this, both deliberate:
 
@@ -529,21 +549,58 @@ No request body. Responses mirror `commit`: `200` with the post-release budget s
 already-released reservation MUST return `200`, for the same idempotency reason as above.
 
 Nothing is drawn by a release, so `requested` MUST be `0` and `warningsCrossed` MUST be empty
-for every budget.
+for every budget. Combined with the whole-group rule of §5.1, every entry in a release
+response is therefore uniformly zero-outcome: the body reports the group's post-release state
+and does not itself identify which budgets the reservation held. A caller needing that has the
+reserve response, which named them.
 
 ### 5.5 `GET /v1/budget`
 
-Read current state without drawing. The budget is identified by the REQUIRED
-`hh-budget-id` header. Honors `hh-tenant`.
+Read current state without drawing. Returns **every budget in the group**, so a caller
+learns the whole state of an atomicity domain in one request. Honors `hh-tenant`.
 
-**Response `200 OK`** — A `budgets` array containing a single entry, in the same shape as
-a `/v1/charge` entry, with `requested`, `exceeded`, and `warningsCrossed` omitted. The
-array wrapper is retained so that a single decoder handles every response in this
-protocol.
+There is no per-budget read and no `hh-budget-id` header. A group is already the unit a
+request addresses and the unit an implementation stores together (§8.1), so returning one
+budget at a time would make reading a group an N-request operation to recover state the
+server holds in one place. Callers wanting a single budget filter the array client-side;
+callers wanting the group, which is the common case, pay for one round trip.
 
-**Response `404 Not Found`** — No such budget in this `(scope, tenant, group)`. Because budgets
-are created lazily on first draw, `404` here means "never drawn against," not necessarily
-"misconfigured."
+**Response `200 OK`** — A `budgets` array holding one entry per budget in the group, in the
+same shape as a `/v1/charge` entry, with `requested`, `exceeded`, and `warningsCrossed`
+omitted. Entries MUST be ordered lexicographically by `id`, so the response is stable across
+calls and between implementations. The array wrapper matches every other response in this
+protocol, so a single decoder handles them all.
+
+```json
+{
+  "budgets": [
+    {
+      "id": "r2-put-ops",
+      "limit": 1000000,
+      "used": 412003,
+      "remaining": 587997,
+      "renewsAt": "2026-09-01T05:00:00Z"
+    },
+    {
+      "id": "r2-storage-bytes",
+      "limit": 10000000000,
+      "used": 9100000000,
+      "remaining": 900000000,
+      "renewsAt": "2026-09-01T05:00:00Z"
+    }
+  ]
+}
+```
+
+The read MUST be atomic with respect to draws: every entry MUST reflect the same instant, so
+a group read concurrent with a multi-budget draw MUST NOT show that draw applied to some of
+its budgets and not others. This falls out of §8.1's one-unit-per-group mapping and is the
+other reason to read a group as a whole. Reading budgets one at a time cannot offer it, since
+a draw may land between two of the calls.
+
+**Response `200 OK` with an empty array** — No budget in this `(scope, tenant, group)` has
+been drawn against yet. This is not an error: budgets are created lazily on first draw, so an
+empty group is simply one nothing has been spent from. There is no `404` on this endpoint.
 
 ---
 
@@ -597,6 +654,18 @@ refers to two unrelated operations and MUST NOT collide.
   request would silently drop a real charge.
 - **Concurrent replay** — If a request with the same key is still in flight,
   implementations SHOULD respond `409` with code `idempotency_in_progress`.
+
+A replay reproduces an earlier response rather than producing a new one. The whole-group rule
+of §5.1 constrains a response at the instant it is first produced, so a replayed `budgets`
+array describes the group as it stood then — including which budgets existed — even if the
+group has since gained budgets or drawn further. Re-rendering it against current state would
+mix two instants in one body: the caller's `warningsCrossed` from the original draw sitting
+beside `used` values its draw did not produce. The frozen body answers "what did my operation
+do", which is the only question a replay is asked; a caller wanting the group as it stands now
+has `GET /v1/budget`.
+
+The same applies to a repeat `/v1/commit` or `/v1/release` on a settled reservation (§5.3,
+§5.4), which replays the body stored when the reservation settled.
 
 ### 7.1 What counts as a different request
 
@@ -738,7 +807,6 @@ reading `budgets` on a `200` reads the identical field on a `402`.
 | 400    | `invalid_request`         | Malformed body, missing field, unknown definition field, negative amount, zero or negative limit, duplicate budget ID, more than 16 budgets, missing `hh-group`, identifier failing the charset rules of §1.1. |
 | 401    | `unauthenticated`         | Missing or invalid credentials.                                                                                                                                                                                |
 | 403    | `forbidden`               | Valid credentials, insufficient access.                                                                                                                                                                        |
-| 404    | `budget_not_found`        | Unknown budget on a read.                                                                                                                                                                                      |
 | 404    | `reservation_not_found`   | Unknown or expired reservation.                                                                                                                                                                                |
 | 402    | `budget_exceeded`         | Insufficient capacity. Accompanied by a top-level `budgets` array.                                                                                                                                             |
 | 409    | `idempotency_conflict`    | Key reused with a different body.                                                                                                                                                                              |

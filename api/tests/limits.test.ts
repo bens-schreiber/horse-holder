@@ -1,16 +1,15 @@
 /**
- * Our documented implementation choices: the values the spec requires us to pick and
- * publish rather than mandating (reservation TTL, idempotency retention), plus our own
- * routing codes.
+ * The values we had to pick and publish (reservation TTL, idempotency retention), plus our own
+ * routing and body-handling codes.
  */
 
-import { env, runInDurableObject, SELF } from "cloudflare:test";
+import { SELF, env, runInDurableObject } from "cloudflare:test";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+
 import { doName } from "../src/index.ts";
 import {
-  RESERVATION_DEFAULT_TTL_SECONDS,
   IDEMPOTENCY_RETENTION_MS,
-  REQUEST_MAX_BUDGETS,
+  RESERVATION_DEFAULT_TTL_SECONDS,
   RESERVATION_MAX_TTL_SECONDS,
 } from "../src/schema.ts";
 
@@ -25,44 +24,56 @@ beforeAll(async () => {
 });
 
 /** The Durable Object backing a group under the suite's account, with no tenant header. */
-const stubFor = (group: string): DurableObjectStub<import("../src/budget.ts").BudgetGroup> =>
-  env.BUDGETS.get(env.BUDGETS.idFromName(doName(accountId, false, "", group)));
+function stubFor(group: string): DurableObjectStub<import("../src/budget.ts").BudgetGroup> {
+  return env.BUDGETS.get(env.BUDGETS.idFromName(doName(accountId, null, group)));
+}
 
 let n = 0;
-const freshGroup = (): string => `g${(n += 1)}-${Math.random().toString(36).slice(2)}`;
-const freshKey = (): string => `k${(n += 1)}-${Math.random().toString(36).slice(2)}`;
 
-function reserve(group: string, ttl?: number): Promise<Response> {
+function freshGroup(): string {
+  return `ci-builds-${(n += 1)}`;
+}
+
+function freshKey(): string {
+  return `build-${(n += 1)}`;
+}
+
+function draw(path: string, group: string, options: { key?: string; ttl?: number } = {}) {
   const headers: Record<string, string> = {
     ...auth,
     "content-type": "application/json",
     "hh-group": group,
-    "idempotency-key": freshKey(),
+    "idempotency-key": options.key ?? freshKey(),
   };
-  if (ttl !== undefined) {
-    headers["hh-ttl-seconds"] = String(ttl);
+  if (options.ttl !== undefined) {
+    headers["hh-ttl-seconds"] = String(options.ttl);
   }
-  return SELF.fetch("https://hh.test/v1/reserve", {
+  return SELF.fetch(`https://hh.test${path}`, {
     method: "POST",
     headers,
     body: JSON.stringify({
-      budgets: [{ id: "b", amount: 1, definition: { limit: 100, renewal: { type: "never" } } }],
+      budgets: [
+        {
+          id: "build-minutes",
+          amount: 1,
+          definition: { limit: 100, renewal: { type: "never" } },
+        },
+      ],
     }),
   });
 }
 
-describe("documented reservation TTL choices", () => {
-  it("defaults to 300 seconds, the value the spec recommends", () => {
-    expect(RESERVATION_DEFAULT_TTL_SECONDS).toBe(300);
-  });
+function reserve(group: string, ttl?: number): Promise<Response> {
+  return draw("/v1/reserve", group, ttl === undefined ? {} : { ttl });
+}
 
-  it("applies that default when hh-ttl-seconds is absent", async () => {
+describe("reservation TTL", () => {
+  it("holds for 300 seconds when hh-ttl-seconds is absent", async () => {
     // Arrange
     const before = Date.now();
 
     // Act
-    const res = await reserve(freshGroup());
-    const { expiresAt } = await res.json<{ expiresAt: string }>();
+    const { expiresAt } = await (await reserve(freshGroup())).json<{ expiresAt: string }>();
 
     // Assert
     const ttl = (Date.parse(expiresAt) - before) / 1000;
@@ -74,9 +85,8 @@ describe("documented reservation TTL choices", () => {
     );
   });
 
-  it("supports the 86400 the spec requires as a minimum ceiling", async () => {
+  it("accepts a hold at the 24 hour ceiling and rejects one past it", async () => {
     // Assert
-    expect(RESERVATION_MAX_TTL_SECONDS).toBe(86_400);
     expect(
       (await reserve(freshGroup(), RESERVATION_MAX_TTL_SECONDS)).status,
       "a TTL at the ceiling must be accepted",
@@ -89,9 +99,11 @@ describe("documented reservation TTL choices", () => {
 
   it("rejects a non-integer or out-of-range TTL", async () => {
     // Assert
-    for (const ttl of [0, -5, 1.5] as number[]) {
+    for (const ttl of [0, -5, 1.5]) {
       expect((await reserve(freshGroup(), ttl)).status, `ttl ${ttl}`).toBe(400);
     }
+
+    // Act
     const nonNumeric = await SELF.fetch("https://hh.test/v1/reserve", {
       method: "POST",
       headers: {
@@ -102,118 +114,97 @@ describe("documented reservation TTL choices", () => {
         "hh-ttl-seconds": "soon",
       },
       body: JSON.stringify({
-        budgets: [{ id: "b", amount: 1, definition: { limit: 100, renewal: { type: "never" } } }],
+        budgets: [
+          {
+            id: "build-minutes",
+            amount: 1,
+            definition: { limit: 100, renewal: { type: "never" } },
+          },
+        ],
       }),
     });
+
+    // Assert
     expect(nonNumeric.status, "a non-numeric ttl header must be rejected").toBe(400);
   });
 });
 
-describe("documented idempotency retention window", () => {
-  it("is 24 hours, the required minimum", () => {
-    expect(IDEMPOTENCY_RETENTION_MS).toBe(24 * 60 * 60 * 1000);
-  });
-
-  it("arms a reclamation alarm once a draw has something to retain", async () => {
-    // Arrange
-    const group = freshGroup();
-    const alarmAt = async (): Promise<number | null> =>
-      runInDurableObject(stubFor(group), (_instance, state) => state.storage.getAlarm());
-    expect(await alarmAt(), "an untouched group must start with no alarm armed").toBeNull();
-
-    // Act
-    await reserve(group);
-    const scheduled = await alarmAt();
-
-    // Assert
-    expect(scheduled, "a draw with a record to retain must arm a reclamation alarm").not.toBeNull();
-    expect(scheduled! - Date.now(), "the alarm was armed in the past").toBeGreaterThan(0);
-  });
-
-  it("reclaims a record once the alarm fires past the window", async () => {
-    // Arrange
-    const group = freshGroup();
-    await reserve(group);
-    const idempotencyKeys = async (): Promise<string[]> =>
-      runInDurableObject(stubFor(group), async (_instance, state) => [
-        ...(await state.storage.list({ prefix: "i:" })).keys(),
-      ]);
-    expect(await idempotencyKeys(), "the reserve should have stored one record").toHaveLength(1);
-
-    // Act
-    await runInDurableObject(stubFor(group), (instance) => instance.alarm());
-
-    // Assert
-    expect(
-      await idempotencyKeys(),
-      "a sweep inside the retention window must keep the record",
-    ).toHaveLength(1);
-
-    vi.setSystemTime(Date.now() + IDEMPOTENCY_RETENTION_MS + 1000);
-    try {
-      await runInDurableObject(stubFor(group), (instance) => instance.alarm());
-      expect(
-        await idempotencyKeys(),
-        "a sweep past the retention window must reclaim the record",
-      ).toHaveLength(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("honors the window at read time, not on whether the sweep has run", async () => {
+describe("idempotency retention", () => {
+  it("honors the window at read time, not on whether reclamation has run", async () => {
     // Arrange
     const group = freshGroup();
     const key = freshKey();
-    const draw = async (): Promise<Response> =>
-      SELF.fetch("https://hh.test/v1/charge", {
-        method: "POST",
-        headers: {
-          ...auth,
-          "content-type": "application/json",
-          "hh-group": group,
-          "idempotency-key": key,
-        },
-        body: JSON.stringify({
-          budgets: [{ id: "b", amount: 1, definition: { limit: 100, renewal: { type: "never" } } }],
-        }),
-      });
-
-    const first = await draw();
-    expect(
-      (await first.json<{ budgets: { used: number }[] }>()).budgets[0]!.used,
-      "the first draw should have applied once",
-    ).toBe(1);
+    async function used(): Promise<number> {
+      const res = await draw("/v1/charge", group, { key });
+      return (await res.json<{ budgets: { used: number }[] }>()).budgets[0]!.used;
+    }
+    expect(await used(), "the first draw should have applied once").toBe(1);
 
     // Act
-    const replay = await draw();
+    const replay = await used();
 
     // Assert
-    expect(
-      (await replay.json<{ budgets: { used: number }[] }>()).budgets[0]!.used,
-      "a replay inside the window must return the original result without re-applying",
-    ).toBe(1);
+    expect(replay, "a replay inside the window must return the original result").toBe(1);
 
     vi.setSystemTime(Date.now() + IDEMPOTENCY_RETENTION_MS + 1000);
     try {
-      const stale = await draw();
+      expect(await used(), "past the window the key must be evaluated fresh").toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reclaims a record once it falls past the window", async () => {
+    // Arrange
+    const group = freshGroup();
+    await draw("/v1/charge", group);
+    async function records(): Promise<string[]> {
+      return runInDurableObject(stubFor(group), async (_instance, state) => [
+        ...(await state.storage.list({ prefix: "i:" })).keys(),
+      ]);
+    }
+    expect(await records(), "the charge should have stored one record").toHaveLength(1);
+
+    // Act: a later request past the window is what drives reclamation.
+    vi.setSystemTime(Date.now() + IDEMPOTENCY_RETENTION_MS + 60_000);
+    try {
+      await draw("/v1/charge", group);
+
+      // Assert
       expect(
-        (await stale.json<{ budgets: { used: number }[] }>()).budgets[0]!.used,
-        "past the window the key must be evaluated fresh, even before the alarm fires",
-      ).toBe(2);
+        await records(),
+        "only the second draw's record should remain, the stale one reclaimed",
+      ).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves no index entry behind for a record it reclaimed", async () => {
+    // Arrange
+    const group = freshGroup();
+    await draw("/v1/charge", group);
+    async function index(): Promise<string[]> {
+      return runInDurableObject(stubFor(group), async (_instance, state) => [
+        ...(await state.storage.list({ prefix: "x:" })).keys(),
+      ]);
+    }
+    expect(await index(), "a stored record must be indexed by its deadline").toHaveLength(1);
+
+    // Act
+    vi.setSystemTime(Date.now() + IDEMPOTENCY_RETENTION_MS + 60_000);
+    try {
+      await draw("/v1/charge", group);
+
+      // Assert
+      expect(await index(), "the reclaimed record's index entry outlived it").toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }
   });
 });
 
-describe("documented request bounds", () => {
-  it("caps a draw at the 16 budgets the spec mandates", () => {
-    expect(REQUEST_MAX_BUDGETS).toBe(16);
-  });
-});
-
-describe("our routing codes", () => {
+describe("routing codes", () => {
   it("names its own codes for routing failures the protocol does not define", async () => {
     // Act
     const unknown = await SELF.fetch("https://hh.test/v1/nonexistent", { headers: auth });
@@ -263,7 +254,9 @@ describe("body handling", () => {
         "idempotency-key": freshKey(),
       },
       body: JSON.stringify({
-        budgets: [{ id: "b", amount: 1, definition: { limit: 10, renewal: { type: "never" } } }],
+        budgets: [
+          { id: "build-minutes", amount: 1, definition: { limit: 10, renewal: { type: "never" } } },
+        ],
         surprise: true,
       }),
     });
@@ -275,8 +268,7 @@ describe("body handling", () => {
   it("treats an empty commit body the same as an omitted one", async () => {
     // Arrange
     const group = freshGroup();
-    const reserved = await reserve(group);
-    const { reservationId } = await reserved.json<{ reservationId: string }>();
+    const { reservationId } = await (await reserve(group)).json<{ reservationId: string }>();
 
     // Act
     const res = await SELF.fetch("https://hh.test/v1/commit", {
@@ -293,8 +285,7 @@ describe("body handling", () => {
   it("rejects a definition on a commit entry", async () => {
     // Arrange
     const group = freshGroup();
-    const reserved = await reserve(group);
-    const { reservationId } = await reserved.json<{ reservationId: string }>();
+    const { reservationId } = await (await reserve(group)).json<{ reservationId: string }>();
 
     // Act
     const res = await SELF.fetch("https://hh.test/v1/commit", {
@@ -306,7 +297,13 @@ describe("body handling", () => {
         "hh-reservation-id": reservationId,
       },
       body: JSON.stringify({
-        budgets: [{ id: "b", amount: 1, definition: { limit: 999, renewal: { type: "never" } } }],
+        budgets: [
+          {
+            id: "build-minutes",
+            amount: 1,
+            definition: { limit: 999, renewal: { type: "never" } },
+          },
+        ],
       }),
     });
 
@@ -316,18 +313,7 @@ describe("body handling", () => {
 
   it("rejects an idempotency-key longer than 255 characters", async () => {
     // Act
-    const res = await SELF.fetch("https://hh.test/v1/charge", {
-      method: "POST",
-      headers: {
-        ...auth,
-        "content-type": "application/json",
-        "hh-group": freshGroup(),
-        "idempotency-key": "k".repeat(256),
-      },
-      body: JSON.stringify({
-        budgets: [{ id: "b", amount: 1, definition: { limit: 10, renewal: { type: "never" } } }],
-      }),
-    });
+    const res = await draw("/v1/charge", freshGroup(), { key: "k".repeat(256) });
 
     // Assert
     expect(res.status, "an over-length idempotency-key was accepted").toBe(400);

@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { isValidTimezone, nextBoundary, type Renewal } from "../src/renewal.ts";
+import { type Renewal, isValidTimezone, nextBoundary } from "../src/renewal.ts";
 
 const at = (iso: string): number => Date.parse(iso);
 const boundary = (rule: Renewal, from: string, createdAt = from): string | null => {

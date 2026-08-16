@@ -1,85 +1,65 @@
 /**
- * Atomicity. These properties are non-negotiable: an implementation that violates them
- * cannot be trusted to enforce a budget at all.
+ * Atomicity. These properties are non-negotiable: an implementation that violates them cannot
+ * be trusted to enforce a budget at all.
  *
- * The concurrency test below is the one most likely to survive casual
- * testing, because the defect appears only under real concurrency.
+ * The concurrency tests below are the ones most likely to survive casual testing, because the
+ * defect appears only under real concurrency.
  */
 
 import { beforeAll, describe, expect, it } from "vitest";
-import { definition, entry, freshGroup, freshKey, get, post, readJson } from "../client.ts";
-import { harness } from "../harness.ts";
 
-let auth: Record<string, string>;
+import { type Scope, budgetsOf, definition, entry, freshGroup, json, scope } from "../client.ts";
+
+let api: Scope;
 beforeAll(async () => {
-  auth = await harness.newScope();
+  api = await scope();
 });
-
-async function used(group: string, id: string): Promise<number> {
-  const res = await get(harness, auth, "/v1/budget", { group, headers: { "hh-budget-id": id } });
-  if (res.status !== 200) {
-    return 0;
-  }
-  return (await readJson<{ budgets: { used: number }[] }>(res)).budgets[0]!.used;
-}
 
 describe("all-or-nothing across budgets", () => {
   it("leaves every budget untouched when one lacks capacity", async () => {
     // Arrange
     const group = freshGroup();
-    await post(
-      harness,
-      auth,
-      "/v1/charge",
-      {
-        budgets: [entry("rich", 0, definition(1000)), entry("poor", 95, definition(100))],
-      },
-      { group, key: freshKey() },
+    await api.charge(
+      { group },
+      entry("storage-bytes", 0, definition(1000)),
+      entry("put-ops", 95, definition(100)),
     );
 
     // Act
-    const res = await post(
-      harness,
-      auth,
-      "/v1/charge",
-      {
-        budgets: [entry("rich", 10, definition(1000)), entry("poor", 10, definition(100))],
-      },
-      { group, key: freshKey() },
+    const res = await api.charge(
+      { group },
+      entry("storage-bytes", 10, definition(1000)),
+      entry("put-ops", 10, definition(100)),
     );
 
     // Assert
     expect(res.status).toBe(402);
-    expect(await used(group, "rich"), "a denied draw silently consumed capacity").toBe(0);
-    expect(await used(group, "poor")).toBe(95);
+    expect(
+      await api.used({ group }, "storage-bytes"),
+      "a denied draw silently consumed capacity",
+    ).toBe(0);
+    expect(await api.used({ group }, "put-ops")).toBe(95);
   });
 
   it("marks every budget that lacked capacity, not merely the first", async () => {
     // Act
-    const res = await post(
-      harness,
-      auth,
-      "/v1/charge",
-      {
-        budgets: [
-          entry("a", 200, definition(100)),
-          entry("b", 1, definition(100)),
-          entry("c", 500, definition(100)),
-        ],
-      },
-      { group: freshGroup(), key: freshKey() },
+    const res = await api.charge(
+      { group: freshGroup() },
+      entry("delete-ops", 200, definition(100)),
+      entry("put-ops", 1, definition(100)),
+      entry("storage-bytes", 500, definition(100)),
     );
 
     // Assert
     expect(res.status).toBe(402);
-    const body = await readJson<{ budgets: { id: string; exceeded: boolean }[] }>(res);
+    const entries = await budgetsOf<{ id: string; exceeded: boolean }>(res);
     expect(
-      body.budgets.map((b) => [b.id, b.exceeded]),
+      entries.map((budget) => [budget.id, budget.exceeded]),
       "every budget that lacked capacity must be marked",
     ).toEqual([
-      ["a", true],
-      ["b", false],
-      ["c", true],
+      ["delete-ops", true],
+      ["put-ops", false],
+      ["storage-bytes", true],
     ]);
   });
 
@@ -88,20 +68,16 @@ describe("all-or-nothing across budgets", () => {
     const group = freshGroup();
 
     // Act
-    const res = await post(
-      harness,
-      auth,
-      "/v1/charge",
-      {
-        budgets: [entry("a", 10, definition(100)), entry("b", 20, definition(100))],
-      },
-      { group, key: freshKey() },
+    const res = await api.charge(
+      { group },
+      entry("put-ops", 10, definition(100)),
+      entry("storage-bytes", 20, definition(100)),
     );
 
     // Assert
     expect(res.status).toBe(200);
-    expect(await used(group, "a")).toBe(10);
-    expect(await used(group, "b")).toBe(20);
+    expect(await api.used({ group }, "put-ops")).toBe(10);
+    expect(await api.used({ group }, "storage-bytes")).toBe(20);
   });
 });
 
@@ -116,26 +92,20 @@ describe("atomic check-and-decrement", () => {
     // Act
     const responses = await Promise.all(
       Array.from({ length: attempts }, () =>
-        post(
-          harness,
-          auth,
-          "/v1/charge",
-          {
-            budgets: [entry("hot", amount, definition(limit))],
-          },
-          { group, key: freshKey() },
-        ),
+        api.charge({ group }, entry("put-ops", amount, definition(limit))),
       ),
     );
 
     // Assert
-    const succeeded = responses.filter((r) => r.status === 200).length;
-    const denied = responses.filter((r) => r.status === 402).length;
+    const succeeded = responses.filter((res) => res.status === 200).length;
+    const denied = responses.filter((res) => res.status === 402).length;
     expect(succeeded, "exactly the number of charges the limit admits must succeed").toBe(
       limit / amount,
     );
     expect(denied, "every charge beyond the limit must be denied").toBe(attempts - limit / amount);
-    expect(await used(group, "hot"), "concurrent charges overshot the limit").toBe(limit);
+    expect(await api.used({ group }, "put-ops"), "concurrent charges overshot the limit").toBe(
+      limit,
+    );
   });
 
   it("never overshoots under concurrent multi-budget draws", async () => {
@@ -145,76 +115,51 @@ describe("atomic check-and-decrement", () => {
     // Act
     const responses = await Promise.all(
       Array.from({ length: 40 }, () =>
-        post(
-          harness,
-          auth,
-          "/v1/charge",
-          {
-            budgets: [entry("x", 10, definition(100)), entry("y", 20, definition(100))],
-          },
-          { group, key: freshKey() },
+        api.charge(
+          { group },
+          entry("put-ops", 10, definition(100)),
+          entry("storage-bytes", 20, definition(100)),
         ),
       ),
     );
 
     // Assert
-    const succeeded = responses.filter((r) => r.status === 200).length;
-    expect(succeeded, "`y` is the binding constraint at 5 successes").toBe(5);
-    expect(await used(group, "x"), "`x` must move in lockstep with the binding budget").toBe(50);
-    expect(await used(group, "y")).toBe(100);
+    const succeeded = responses.filter((res) => res.status === 200).length;
+    expect(succeeded, "storage-bytes is the binding constraint at 5 successes").toBe(5);
+    expect(
+      await api.used({ group }, "put-ops"),
+      "put-ops must move in lockstep with the binding budget",
+    ).toBe(50);
+    expect(await api.used({ group }, "storage-bytes")).toBe(100);
   });
 
   it("never overshoots under a mix of concurrent charges, reserves, and settles", async () => {
     // Arrange
     const group = freshGroup();
     const limit = 100;
-
     const reserves = await Promise.all(
       Array.from({ length: 20 }, () =>
-        post(
-          harness,
-          auth,
-          "/v1/reserve",
-          {
-            budgets: [entry("mix", 10, definition(limit))],
-          },
-          { group, key: freshKey() },
-        ),
+        api.reserve({ group }, entry("put-ops", 10, definition(limit))),
       ),
     );
     const ids = await Promise.all(
       reserves
-        .filter((r) => r.status === 200)
-        .map(async (r) => (await readJson<{ reservationId: string }>(r)).reservationId),
+        .filter((res) => res.status === 200)
+        .map(async (res) => (await json<{ reservationId: string }>(res)).reservationId),
     );
     expect(ids.length, "the limit admits exactly 10 concurrent reservations").toBe(10);
 
     // Act
-    await Promise.all(
-      ids.slice(0, 5).map((id) =>
-        post(harness, auth, "/v1/release", undefined, {
-          group,
-          headers: { "hh-reservation-id": id },
-        }),
-      ),
-    );
+    await Promise.all(ids.slice(0, 5).map((id) => api.release({ group }, id)));
     await Promise.all(
       Array.from({ length: 20 }, () =>
-        post(
-          harness,
-          auth,
-          "/v1/charge",
-          {
-            budgets: [entry("mix", 10, definition(limit))],
-          },
-          { group, key: freshKey() },
-        ),
+        api.charge({ group }, entry("put-ops", 10, definition(limit))),
       ),
     );
 
     // Assert
     expect(
-      await used(group, "mix"),
+      await api.used({ group }, "put-ops"),
       "a concurrent mix of charges, reserves, and settles overshot the limit",
     ).toBeLessThanOrEqual(limit);
   });

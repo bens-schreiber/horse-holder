@@ -1,8 +1,8 @@
 packages:
   - "api"
   - "tests"
+  - "client/ts"
 
 allowBuilds:
   esbuild: true
-  sharp: false
   workerd: true

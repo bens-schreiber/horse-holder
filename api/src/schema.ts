@@ -1,5 +1,6 @@
 import { Result, TaggedError } from "better-result";
 import { z } from "zod";
+
 import { Renewal } from "./renewal.ts";
 
 /**
@@ -12,7 +13,6 @@ export const Header = {
   Tenant: "hh-tenant",
   Group: "hh-group",
   ReservationId: "hh-reservation-id",
-  BudgetId: "hh-budget-id",
   TtlSeconds: "hh-ttl-seconds",
   RetryAfter: "retry-after",
 } as const;
@@ -39,7 +39,6 @@ export const Path = {
 export const Code = {
   InvalidRequest: "invalid_request",
   Unauthenticated: "unauthenticated",
-  BudgetNotFound: "budget_not_found",
   ReservationNotFound: "reservation_not_found",
   BudgetExceeded: "budget_exceeded",
   IdempotencyConflict: "idempotency_conflict",
@@ -152,6 +151,9 @@ export interface DrawnBudgetView extends BudgetView {
   exceeded: boolean;
   warningsCrossed: number[];
 }
+
+/** What one request did to one budget: the fields a `DrawnBudgetView` adds to a `BudgetView`. */
+export type Outcome = Pick<DrawnBudgetView, "requested" | "exceeded" | "warningsCrossed">;
 
 export type ErrorCode = (typeof Code)[keyof typeof Code];
 

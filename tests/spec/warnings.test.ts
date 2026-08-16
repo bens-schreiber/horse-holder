@@ -1,41 +1,34 @@
 /** Warning thresholds and the per-period high-water mark. */
 
 import { beforeAll, describe, expect, it } from "vitest";
-import { definition, entry, freshGroup, freshKey, post, readJson } from "../client.ts";
-import { harness } from "../harness.ts";
 
-let auth: Record<string, string>;
+import { type Scope, budgetsOf, definition, entry, freshGroup, scope, sleep } from "../client.ts";
+
+let api: Scope;
 beforeAll(async () => {
-  auth = await harness.newScope();
+  api = await scope();
 });
 
 const WARNINGS = [0.5, 0.8, 0.95];
 
+/** Charges one budget and reports only the thresholds that draw crossed. */
 async function charge(
   group: string,
   amount: number,
   options: { limit?: number; warnings?: number[]; renewal?: Record<string, unknown> } = {},
 ): Promise<number[]> {
-  const res = await post(
-    harness,
-    auth,
-    "/v1/charge",
-    {
-      budgets: [
-        entry(
-          "b",
-          amount,
-          definition(options.limit ?? 100, {
-            warnings: options.warnings ?? WARNINGS,
-            ...(options.renewal === undefined ? {} : { renewal: options.renewal }),
-          }),
-        ),
-      ],
-    },
-    { group, key: freshKey() },
+  const res = await api.charge(
+    { group },
+    entry(
+      "spend-millicents",
+      amount,
+      definition(options.limit ?? 100, {
+        warnings: options.warnings ?? WARNINGS,
+        ...(options.renewal === undefined ? undefined : { renewal: options.renewal }),
+      }),
+    ),
   );
-  const body = await readJson<{ budgets: { warningsCrossed: number[] }[] }>(res);
-  return body.budgets[0]!.warningsCrossed;
+  return (await budgetsOf<{ warningsCrossed: number[] }>(res))[0]!.warningsCrossed;
 }
 
 describe("warnings", () => {
@@ -57,10 +50,11 @@ describe("warnings", () => {
     const group = freshGroup();
     await charge(group, 40);
 
+    // Act
+    const crossed = await charge(group, 50);
+
     // Assert
-    expect(await charge(group, 50), "a jump from 40% to 90% crosses both 0.5 and 0.8").toEqual([
-      0.5, 0.8,
-    ]);
+    expect(crossed, "a jump from 40% to 90% crosses both 0.5 and 0.8").toEqual([0.5, 0.8]);
   });
 
   it("does not re-fire a threshold already crossed", async () => {
@@ -75,22 +69,13 @@ describe("warnings", () => {
   it("does not lower the high-water mark on a release", async () => {
     // Arrange
     const group = freshGroup();
-    const reserved = await post(
-      harness,
-      auth,
-      "/v1/reserve",
-      {
-        budgets: [entry("b", 60, definition(100, { warnings: WARNINGS }))],
-      },
-      { group, key: freshKey() },
+    const id = await api.hold(
+      { group },
+      entry("spend-millicents", 60, definition(100, { warnings: WARNINGS })),
     );
-    const { reservationId } = await readJson<{ reservationId: string }>(reserved);
 
     // Act
-    await post(harness, auth, "/v1/release", undefined, {
-      group,
-      headers: { "hh-reservation-id": reservationId },
-    });
+    await api.release({ group }, id);
 
     // Assert
     expect(await charge(group, 60), "the mark fell back with usage, so 0.5 fired twice").toEqual(
@@ -101,28 +86,13 @@ describe("warnings", () => {
   it("does not lower the high-water mark on a downward commit", async () => {
     // Arrange
     const group = freshGroup();
-    const reserved = await post(
-      harness,
-      auth,
-      "/v1/reserve",
-      {
-        budgets: [entry("b", 90, definition(100, { warnings: WARNINGS }))],
-      },
-      { group, key: freshKey() },
+    const id = await api.hold(
+      { group },
+      entry("spend-millicents", 90, definition(100, { warnings: WARNINGS })),
     );
-    const { reservationId } = await readJson<{ reservationId: string }>(reserved);
 
     // Act
-    await post(
-      harness,
-      auth,
-      "/v1/commit",
-      { budgets: [{ id: "b", amount: 10 }] },
-      {
-        group,
-        headers: { "hh-reservation-id": reservationId },
-      },
-    );
+    await api.commit({ group }, id, { budgets: [{ id: "spend-millicents", amount: 10 }] });
 
     // Assert
     expect(
@@ -138,7 +108,7 @@ describe("warnings", () => {
     expect(await charge(group, 60, { renewal })).toEqual([0.5]);
 
     // Act
-    await new Promise((r) => setTimeout(r, 1100));
+    await sleep(1100);
 
     // Assert
     expect(
@@ -179,11 +149,13 @@ describe("warnings", () => {
     const group = freshGroup();
     await charge(group, 60, { warnings: [0.5] });
 
+    // Act
+    const crossed = await charge(group, 30, { warnings: [0.5, 0.9] });
+
     // Assert
-    expect(
-      await charge(group, 30, { warnings: [0.5, 0.9] }),
-      "0.9 sits above the mark of 0.6 and must fire when usage reaches it",
-    ).toEqual([0.9]);
+    expect(crossed, "0.9 sits above the mark of 0.6 and must fire when usage reaches it").toEqual([
+      0.9,
+    ]);
   });
 
   it("rejects thresholds outside the open interval (0, 1)", async () => {
@@ -191,17 +163,12 @@ describe("warnings", () => {
     const group = freshGroup();
 
     // Assert
-    for (const w of [0, 1, 1.5, -0.5]) {
-      const res = await post(
-        harness,
-        auth,
-        "/v1/charge",
-        {
-          budgets: [entry("b", 1, definition(100, { warnings: [w] }))],
-        },
-        { group, key: freshKey() },
+    for (const threshold of [0, 1, 1.5, -0.5]) {
+      const res = await api.charge(
+        { group },
+        entry("spend-millicents", 1, definition(100, { warnings: [threshold] })),
       );
-      expect(res.status, `threshold ${w}`).toBe(400);
+      expect(res.status, `threshold ${threshold}`).toBe(400);
     }
   });
 
@@ -211,21 +178,15 @@ describe("warnings", () => {
     await charge(group, 100);
 
     // Act
-    const res = await post(
-      harness,
-      auth,
-      "/v1/charge",
-      {
-        budgets: [entry("b", 50, definition(100, { warnings: WARNINGS }))],
-      },
-      { group, key: freshKey() },
+    const res = await api.charge(
+      { group },
+      entry("spend-millicents", 50, definition(100, { warnings: WARNINGS })),
     );
 
     // Assert
     expect(res.status).toBe(402);
-    const body = await readJson<{ budgets: { warningsCrossed: number[] }[] }>(res);
     expect(
-      body.budgets[0]!.warningsCrossed,
+      (await budgetsOf<{ warningsCrossed: number[] }>(res))[0]!.warningsCrossed,
       "a denied draw crossed nothing and must report nothing",
     ).toEqual([]);
   });

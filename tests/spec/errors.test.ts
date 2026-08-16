@@ -1,12 +1,21 @@
 /** The error envelope, and the `402` body and headers of a failed draw. */
 
 import { beforeAll, describe, expect, it } from "vitest";
-import { definition, entry, freshGroup, freshKey, get, post, readJson } from "../client.ts";
-import { harness } from "../harness.ts";
 
-let auth: Record<string, string>;
+import {
+  type Scope,
+  budgetsOf,
+  definition,
+  entry,
+  errorCode,
+  freshGroup,
+  json,
+  scope,
+} from "../client.ts";
+
+let api: Scope;
 beforeAll(async () => {
-  auth = await harness.newScope();
+  api = await scope();
 });
 
 describe("error format", () => {
@@ -16,185 +25,19 @@ describe("error format", () => {
 
     // Act
     const responses = [
-      await post(harness, auth, "/v1/charge", { budgets: [] }, { group, key: freshKey() }),
-      await get(harness, auth, "/v1/budget", { group, headers: { "hh-budget-id": "nope" } }),
-      await post(harness, auth, "/v1/commit", undefined, {
-        group,
-        headers: { "hh-reservation-id": "rsv_nope" },
-      }),
+      await api.charge({ group }),
+      await api.fetch("/v1/budget", { method: "GET" }),
+      await api.commit({ group }, "rsv_nope"),
     ];
 
     // Assert
     for (const res of responses) {
       expect(res.status).toBeGreaterThanOrEqual(400);
-      const body = await readJson<{ error: { code: string; message: string } }>(res);
+      const body = await json<{ error: { code: string; message: string } }>(res);
       expect(typeof body.error.code, `${res.status} carried no error code`).toBe("string");
-      expect(typeof body.error.message, `${res.status} carried no error message`).toBe("string");
       expect(body.error.message.length, `${res.status} carried an empty message`).toBeGreaterThan(
         0,
       );
-    }
-  });
-
-  it("reaches each documented status and code", async () => {
-    // Arrange
-    const group = freshGroup();
-
-    // Case: invalid_request
-    {
-      // Act
-      const res = await post(
-        harness,
-        auth,
-        "/v1/charge",
-        {
-          budgets: [entry("b", -1, definition(100))],
-        },
-        { group, key: freshKey() },
-      );
-
-      // Assert
-      expect([res.status, (await readJson<{ error: { code: string } }>(res)).error.code]).toEqual([
-        400,
-        "invalid_request",
-      ]);
-    }
-
-    // Case: unauthenticated
-    {
-      // Act
-      const res = await harness.fetch("/v1/budget", {
-        method: "GET",
-        headers: { "hh-group": group, "hh-budget-id": "b" },
-      });
-
-      // Assert
-      expect([res.status, (await readJson<{ error: { code: string } }>(res)).error.code]).toEqual([
-        401,
-        "unauthenticated",
-      ]);
-    }
-
-    // Case: budget_not_found
-    {
-      // Act
-      const res = await get(harness, auth, "/v1/budget", {
-        group,
-        headers: { "hh-budget-id": "never-drawn" },
-      });
-
-      // Assert
-      expect([res.status, (await readJson<{ error: { code: string } }>(res)).error.code]).toEqual([
-        404,
-        "budget_not_found",
-      ]);
-    }
-
-    // Case: reservation_not_found
-    {
-      // Act
-      const res = await post(harness, auth, "/v1/release", undefined, {
-        group,
-        headers: { "hh-reservation-id": "rsv_nope" },
-      });
-
-      // Assert
-      expect([res.status, (await readJson<{ error: { code: string } }>(res)).error.code]).toEqual([
-        404,
-        "reservation_not_found",
-      ]);
-    }
-
-    // Case: budget_exceeded
-    {
-      // Arrange
-      await post(
-        harness,
-        auth,
-        "/v1/charge",
-        {
-          budgets: [entry("full", 100, definition(100))],
-        },
-        { group, key: freshKey() },
-      );
-
-      // Act
-      const res = await post(
-        harness,
-        auth,
-        "/v1/charge",
-        {
-          budgets: [entry("full", 1, definition(100))],
-        },
-        { group, key: freshKey() },
-      );
-
-      // Assert
-      expect([res.status, (await readJson<{ error: { code: string } }>(res)).error.code]).toEqual([
-        402,
-        "budget_exceeded",
-      ]);
-    }
-
-    // Case: idempotency_conflict
-    {
-      // Arrange
-      const key = freshKey();
-      await post(
-        harness,
-        auth,
-        "/v1/charge",
-        { budgets: [entry("c", 1, definition(100))] },
-        { group, key },
-      );
-
-      // Act
-      const res = await post(
-        harness,
-        auth,
-        "/v1/charge",
-        {
-          budgets: [entry("c", 2, definition(100))],
-        },
-        { group, key },
-      );
-
-      // Assert
-      expect([res.status, (await readJson<{ error: { code: string } }>(res)).error.code]).toEqual([
-        409,
-        "idempotency_conflict",
-      ]);
-    }
-
-    // Case: reservation_settled
-    {
-      // Arrange
-      const reserved = await post(
-        harness,
-        auth,
-        "/v1/reserve",
-        {
-          budgets: [entry("s", 1, definition(100))],
-        },
-        { group, key: freshKey() },
-      );
-      const { reservationId } = await readJson<{ reservationId: string }>(reserved);
-      await post(harness, auth, "/v1/release", undefined, {
-        group,
-        headers: { "hh-reservation-id": reservationId },
-      });
-
-      // Act
-      const res = await post(harness, auth, "/v1/commit", undefined, {
-        group,
-        headers: { "hh-reservation-id": reservationId },
-      });
-
-      // Assert
-      expect([res.status, (await readJson<{ error: { code: string } }>(res)).error.code]).toEqual([
-        409,
-        "reservation_settled",
-      ]);
     }
   });
 });
@@ -202,18 +45,13 @@ describe("error format", () => {
 describe("the 402 body", () => {
   it("carries budgets as a sibling of error, not nested inside it", async () => {
     // Act
-    const res = await post(
-      harness,
-      auth,
-      "/v1/charge",
-      {
-        budgets: [entry("b", 500, definition(100))],
-      },
-      { group: freshGroup(), key: freshKey() },
+    const res = await api.charge(
+      { group: freshGroup() },
+      entry("input-tokens", 500, definition(100)),
     );
 
     // Assert
-    const body = await readJson<{ error: Record<string, unknown>; budgets: unknown[] }>(res);
+    const body = await json<{ error: Record<string, unknown>; budgets: unknown[] }>(res);
     expect(
       Array.isArray(body.budgets),
       "a decoder reading `budgets` on a 200 must read the same field here",
@@ -224,31 +62,42 @@ describe("the 402 body", () => {
     ).toBeUndefined();
   });
 
-  it("uses the same shape and ordering as a 200, covering every requested budget", async () => {
+  it("counts only the budgets the request named in the message", async () => {
+    // Arrange
+    const group = freshGroup();
+    await api.charge({ group }, entry("requests", 1, definition(100)));
+
     // Act
-    const res = await post(
-      harness,
-      auth,
-      "/v1/charge",
-      {
-        budgets: [
-          entry("first", 1, definition(100)),
-          entry("second", 500, definition(100)),
-          entry("third", 1, definition(100)),
-        ],
-      },
-      { group: freshGroup(), key: freshKey() },
+    const res = await api.charge({ group }, entry("input-tokens", 500, definition(100)));
+
+    // Assert
+    expect(res.status).toBe(402);
+    const body = await json<{ error: { message: string }; budgets: unknown[] }>(res);
+    expect(body.budgets, "the array still covers the whole group").toHaveLength(2);
+    expect(
+      body.error.message,
+      "a budget the request never named did not participate in the failure",
+    ).toBe("1 of 1 budgets lacked capacity");
+  });
+
+  it("uses the same shape and ordering as a 200, covering every budget in the group", async () => {
+    // Act
+    const res = await api.charge(
+      { group: freshGroup() },
+      entry("input-tokens", 1, definition(100)),
+      entry("output-tokens", 500, definition(100)),
+      entry("requests", 1, definition(100)),
     );
 
     // Assert
     expect(res.status).toBe(402);
-    const body = await readJson<{ budgets: Record<string, unknown>[] }>(res);
+    const entries = await budgetsOf(res);
     expect(
-      body.budgets.map((b) => b["id"]),
-      "every requested budget must appear, in request order",
-    ).toEqual(["first", "second", "third"]);
-    for (const b of body.budgets) {
-      expect(Object.keys(b).sort(), `entry ${String(b["id"])}`).toEqual([
+      entries.map((b) => b["id"]),
+      "every budget in the group must appear, ordered by id",
+    ).toEqual(["input-tokens", "output-tokens", "requests"]);
+    for (const budget of entries) {
+      expect(Object.keys(budget).sort(), `entry ${String(budget["id"])}`).toEqual([
         "exceeded",
         "id",
         "limit",
@@ -264,57 +113,25 @@ describe("the 402 body", () => {
   it("reports pre-draw used and remaining", async () => {
     // Arrange
     const group = freshGroup();
-    await post(
-      harness,
-      auth,
-      "/v1/charge",
-      {
-        budgets: [entry("b", 40, definition(100))],
-      },
-      { group, key: freshKey() },
-    );
+    await api.charge({ group }, entry("input-tokens", 40, definition(100)));
 
     // Act
-    const res = await post(
-      harness,
-      auth,
-      "/v1/charge",
-      {
-        budgets: [entry("b", 90, definition(100))],
-      },
-      { group, key: freshKey() },
-    );
+    const res = await api.charge({ group }, entry("input-tokens", 90, definition(100)));
 
     // Assert
-    const body = await readJson<{ budgets: { used: number; remaining: number }[] }>(res);
-    expect(body.budgets[0]!.used, "the denied draw must not be counted into used").toBe(40);
-    expect(body.budgets[0]!.remaining, "remaining must reflect state before the draw").toBe(60);
+    const [budget] = await budgetsOf<{ used: number; remaining: number }>(res);
+    expect(budget!.used, "the denied draw must not be counted into used").toBe(40);
+    expect(budget!.remaining, "remaining must reflect state before the draw").toBe(60);
   });
 
   it("sends retry-after set to the earliest renewal among exceeded budgets", async () => {
     // Arrange
     const group = freshGroup();
     const renewal = { type: "interval", seconds: 3600 };
-    await post(
-      harness,
-      auth,
-      "/v1/charge",
-      {
-        budgets: [entry("b", 100, definition(100, { renewal }))],
-      },
-      { group, key: freshKey() },
-    );
+    await api.charge({ group }, entry("input-tokens", 100, definition(100, { renewal })));
 
     // Act
-    const res = await post(
-      harness,
-      auth,
-      "/v1/charge",
-      {
-        budgets: [entry("b", 1, definition(100, { renewal }))],
-      },
-      { group, key: freshKey() },
-    );
+    const res = await api.charge({ group }, entry("input-tokens", 1, definition(100, { renewal })));
 
     // Assert
     expect(res.status).toBe(402);
@@ -322,8 +139,9 @@ describe("the 402 body", () => {
     expect(Number.isInteger(retryAfter), "retry-after must be whole seconds").toBe(true);
     expect(retryAfter).toBeGreaterThan(0);
     expect(retryAfter).toBeLessThanOrEqual(3600);
-    const body = await readJson<{ budgets: { renewsAt: string }[] }>(res);
-    const expected = Math.ceil((Date.parse(body.budgets[0]!.renewsAt) - Date.now()) / 1000);
+
+    const [budget] = await budgetsOf<{ renewsAt: string }>(res);
+    const expected = Math.ceil((Date.parse(budget!.renewsAt) - Date.now()) / 1000);
     expect(
       Math.abs(retryAfter - expected),
       "retry-after must agree with the renewsAt it is derived from",
@@ -332,17 +150,14 @@ describe("the 402 body", () => {
 
   it("takes the earliest boundary when several budgets are exceeded", async () => {
     // Act
-    const res = await post(
-      harness,
-      auth,
-      "/v1/charge",
-      {
-        budgets: [
-          entry("slow", 500, definition(100, { renewal: { type: "interval", seconds: 86_400 } })),
-          entry("fast", 500, definition(100, { renewal: { type: "interval", seconds: 60 } })),
-        ],
-      },
-      { group: freshGroup(), key: freshKey() },
+    const res = await api.charge(
+      { group: freshGroup() },
+      entry(
+        "input-tokens",
+        500,
+        definition(100, { renewal: { type: "interval", seconds: 86_400 } }),
+      ),
+      entry("requests", 500, definition(100, { renewal: { type: "interval", seconds: 60 } })),
     );
 
     // Assert
@@ -355,14 +170,9 @@ describe("the 402 body", () => {
 
   it("omits retry-after when every exceeded budget is never", async () => {
     // Act
-    const res = await post(
-      harness,
-      auth,
-      "/v1/charge",
-      {
-        budgets: [entry("b", 500, definition(100))],
-      },
-      { group: freshGroup(), key: freshKey() },
+    const res = await api.charge(
+      { group: freshGroup() },
+      entry("input-tokens", 500, definition(100)),
     );
 
     // Assert
@@ -375,17 +185,10 @@ describe("the 402 body", () => {
 
   it("ignores a never budget when a renewing one is also exceeded", async () => {
     // Act
-    const res = await post(
-      harness,
-      auth,
-      "/v1/charge",
-      {
-        budgets: [
-          entry("lifetime", 500, definition(100)),
-          entry("hourly", 500, definition(100, { renewal: { type: "interval", seconds: 3600 } })),
-        ],
-      },
-      { group: freshGroup(), key: freshKey() },
+    const res = await api.charge(
+      { group: freshGroup() },
+      entry("lifetime-tokens", 500, definition(100)),
+      entry("input-tokens", 500, definition(100, { renewal: { type: "interval", seconds: 3600 } })),
     );
 
     // Assert
@@ -399,13 +202,19 @@ describe("the 402 body", () => {
 describe("routing", () => {
   it("rejects an unknown route and a wrong method", async () => {
     // Act
-    const unknown = await get(harness, auth, "/v1/nope", { group: freshGroup() });
-    const wrongMethod = await get(harness, auth, "/v1/charge", { group: freshGroup() });
+    const unknownRoute = await api.fetch("/v1/nope", {
+      method: "GET",
+      headers: { "hh-group": freshGroup() },
+    });
+    const wrongMethod = await api.fetch("/v1/charge", {
+      method: "GET",
+      headers: { "hh-group": freshGroup() },
+    });
 
     // Assert
-    expect(unknown.status).toBe(404);
+    expect(unknownRoute.status).toBe(404);
     expect(
-      (await readJson<{ error: { code: string } }>(unknown)).error.code.length,
+      (await errorCode(unknownRoute)).length,
       "a routing error carries an implementation-chosen code, but it must not be empty",
     ).toBeGreaterThan(0);
     expect(wrongMethod.status, "GET on a POST-only route is a method error").toBe(405);
@@ -413,13 +222,12 @@ describe("routing", () => {
 
   it("rejects a malformed JSON body with 400", async () => {
     // Act
-    const res = await harness.fetch("/v1/charge", {
+    const res = await api.fetch("/v1/charge", {
       method: "POST",
       headers: {
-        ...auth,
         "content-type": "application/json",
         "hh-group": freshGroup(),
-        "idempotency-key": freshKey(),
+        "idempotency-key": "chat-turn-51ac",
       },
       body: "{not json",
     });

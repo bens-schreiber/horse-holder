@@ -6,17 +6,21 @@
  * `HH_BASE_URL` at it. `setup.ts` starts ours when that variable is absent.
  *
  * The one implementation-defined thing the suite needs is a fresh scope, since the protocol
- * leaves
- * authentication open. Ours mints one through the `/v1/keys` extension; another server
+ * leaves authentication open. Ours mints one through the `/v1/keys` extension; another server
  * substitutes its own equivalent here.
  */
 
 import { inject } from "vitest";
-import type { Harness } from "./client.ts";
+
+export interface Harness {
+  /** Headers granting access to a fresh, empty, isolated scope. */
+  newScope(): Promise<Record<string, string>>;
+  fetch(path: string, init?: RequestInit): Promise<Response>;
+}
 
 const baseUrl = inject("baseUrl");
 
-export const harness = {
+export const harness: Harness = {
   async newScope() {
     const res = await harness.fetch("/v1/keys", { method: "POST" });
     if (res.status !== 201) {
@@ -29,4 +33,4 @@ export const harness = {
   fetch(path, init) {
     return fetch(new URL(path, baseUrl), init);
   },
-} satisfies Harness;
+};

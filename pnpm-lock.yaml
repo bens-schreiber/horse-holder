@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@horse-holder/client':
+        specifier: workspace:*
+        version: link:client/ts
     devDependencies:
       oxfmt:
         specifier: 0.63.0
@@ -37,7 +41,13 @@ importers:
         specifier: ^4.42.0
         version: 4.123.0
 
+  client/ts: {}
+
   tests:
+    dependencies:
+      '@horse-holder/client':
+        specifier: workspace:*
+        version: link:../client/ts
     devDependencies:
       '@types/node':
         specifier: ^24.0.0

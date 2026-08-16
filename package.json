@@ -2,6 +2,9 @@
   "name": "horse-holder",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "@horse-holder/client": "workspace:*"
+  },
   "devDependencies": {
     "oxfmt": "0.63.0",
     "oxlint": "^1.78.0",
