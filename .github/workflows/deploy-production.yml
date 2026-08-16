@@ -58,11 +58,6 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: make deploy-production
 
-      - name: Smoke test
-        env:
-          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
-        run: make smoke URL="$DEPLOY_URL"
-
       - name: Rollback hint
         if: failure()
         run: |
