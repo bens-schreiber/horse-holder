@@ -1,6 +1,6 @@
 {
   "name": "@horse-holder/client",
-  "version": "0.1.2",
+  "version": "0.1.1",
   "description": "TypeScript client for the Horse Holder v1 protocol",
   "license": "MIT",
   "repository": {
