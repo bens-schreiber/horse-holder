@@ -3,3 +3,5 @@ node_modules/
 api/worker-configuration.d.ts
 *.log
 client/ts/dist/
+site/dist
+site/.astro

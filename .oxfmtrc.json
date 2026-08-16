@@ -2,5 +2,6 @@
   "lineWidth": 100,
   "indentWidth": 2,
   "quoteStyle": "double",
-  "semicolons": true
+  "semicolons": true,
+  "ignorePatterns": ["**/node_modules/**", "**/dist/**", "**/.wrangler/**", "**/.astro/**"]
 }

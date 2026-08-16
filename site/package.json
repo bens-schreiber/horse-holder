@@ -1,0 +1,13 @@
+{
+  "name": "@horse-holder/site",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@horse-holder/api": "workspace:*"
+  },
+  "devDependencies": {
+    "@astrojs/cloudflare": "^12.6.0",
+    "astro": "^5.14.0",
+    "wrangler": "^4.42.0"
+  }
+}

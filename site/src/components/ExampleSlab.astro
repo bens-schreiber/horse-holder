@@ -1,0 +1,41 @@
+---
+import { Code } from "astro:components";
+import Meter from "./Meter.astro";
+
+const example = `const cdn = hhldr.group({
+  id: "cdn",
+  budgets: {
+    "requests": { limit: 5_000 },
+    "egress-kb": { limit: 1_000_000 },
+  },
+});
+
+// A 5 GB download against an egress
+// budget that has 4 MB left.
+const refused = await cdn.charge(
+  { "requests": 1, "egress-kb": 5_000_000 },
+  { idempotencyKey: "asset-51ac" },
+);`;
+---
+
+<div class="slab">
+  <div class="slab-code">
+    <div class="slab-label">cdn.charge(…)</div>
+    <Code code={example} lang="ts" theme="css-variables" />
+  </div>
+
+  <div>
+    <div class="status">
+      <span class="status-code">402</span>
+      <span class="status-text">budget_exceeded</span>
+    </div>
+
+    <Meter name="requests" used={2411} limit={5000} display="2,411 / 5,000" />
+    <Meter name="egress-kb" used={996000} limit={1000000} display="996k / 1,000k" exceeded />
+
+    <p class="verdict">
+      <strong>Nothing was spent.</strong> Not on the budget that ran out, and not on the one that
+      had room. Retry in 12d.
+    </p>
+  </div>
+</div>

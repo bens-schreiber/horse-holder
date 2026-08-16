@@ -1,0 +1,95 @@
+---
+import Base from "../layouts/Base.astro";
+import { serve } from "@horse-holder/api/serve.ts";
+
+export const prerender = false;
+
+interface Issued {
+  accountId: string;
+  apiKey: string;
+}
+
+let issued: Issued | null = null;
+let error: string | null = null;
+
+if (Astro.request.method === "POST") {
+  // Straight to the same handler `/v1/keys` uses, in-process: no fetch, no second trip.
+  const response = await serve(
+    new Request(new URL("/v1/keys", Astro.request.url), { method: "POST" }),
+    Astro.locals.runtime.env,
+  );
+
+  if (response.status === 201) {
+    issued = (await response.json()) as Issued;
+  } else {
+    error = `Key issuance failed (${response.status}). Please try again.`;
+  }
+
+  // The body of this response is a secret.
+  Astro.response.headers.set("cache-control", "no-store");
+}
+
+const snippet = (apiKey: string) => `import { HorseHolderClient } from "@horse-holder/client";
+
+const hhldr = new HorseHolderClient({
+  baseUrl: "https://horseholder.dev",
+  apiKey: "${apiKey}",
+});`;
+
+const curl = (apiKey: string) => `curl https://horseholder.dev/v1/whoami \\
+  -H "authorization: Bearer ${apiKey}"`;
+---
+
+<Base description="Issue an account and its first API key.">
+  <div class="wrap">
+    <h1>Get an API key</h1>
+
+    {
+      error !== null && (
+        <p class="error" role="alert">
+          {error}
+        </p>
+      )
+    }
+
+    {
+      issued === null ? (
+        <>
+          <p class="story">
+            No sign-up, no email, no card. Free and unlimited. The key is shown once, so copy it
+            when it appears.
+          </p>
+          <form method="post">
+            <button class="btn" type="submit">
+              Issue an account and key
+            </button>
+          </form>
+        </>
+      ) : (
+        <section aria-labelledby="issued-heading" tabindex="-1">
+          <h2 id="issued-heading">Your key</h2>
+
+          <p class="warning">
+            <strong>This is the only time this key is shown.</strong> If you lose it, issue
+            another.
+          </p>
+
+          <span class="field-label">Account ID</span>
+          <code class="key-box">{issued.accountId}</code>
+
+          <span class="field-label">API key</span>
+          <code class="key-box">{issued.apiKey}</code>
+
+          {/* Plain `<pre>`, not Astro's `<Code>`: Shiki highlights with a Wasm regex engine
+              that Workers will not compile at request time, and these snippets carry a
+              per-request key, so there is nothing to prebuild. */}
+          <span class="field-label">Try it</span>
+          <pre class="wrap-code">{curl(issued.apiKey)}</pre>
+
+          <span class="field-label">From TypeScript</span>
+          <pre class="wrap-code">{snippet(issued.apiKey)}</pre>
+        </section>
+      )
+    }
+  </div>
+</Base>

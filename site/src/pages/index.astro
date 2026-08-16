@@ -1,0 +1,100 @@
+---
+import { Code } from "astro:components";
+import ExampleSlab from "../components/ExampleSlab.astro";
+import GitHubLink from "../components/GitHubLink.astro";
+import Base from "../layouts/Base.astro";
+
+// Every budget id is quoted, including the ones that would be valid bare identifiers. Mixing
+// the two in one object reads like the quotes mean something, and they do not.
+const declare = `import { HorseHolderClient, renewal } from "@horse-holder/client";
+
+const hhldr = new HorseHolderClient({
+  baseUrl: "https://horseholder.dev",
+  apiKey: process.env.HORSEHOLDER_API_KEY,
+});
+
+const storage = hhldr.group({
+  id: "r2-storage",
+  budgets: {
+    "put-ops": {
+      limit: 1_000_000,
+      warnings: [0.8],
+      renewal: renewal.monthly({ timezone: "America/Chicago" }),
+    },
+    "egress-bytes": { limit: 50_000_000_000, renewal: renewal.monthly() },
+  },
+});`;
+
+const draw = `const result = await storage.charge(
+  { "put-ops": 1, "egress-bytes": object.size },
+  { idempotencyKey: uploadId },
+);
+
+if (!result.ok) {
+  return tooExpensive({ retryAfter: result.retryAfter });
+}
+
+await bucket.put(key, object);`;
+
+const reserve = `const email = hhldr.group({
+  id: "transactional-email",
+  budgets: { "sends": { limit: 200_000, renewal: renewal.monthly() } },
+});
+
+// Hold the whole recipient list, then correct it to what actually went out.
+const lease = await email.reserve(
+  { "sends": recipients.length },
+  { idempotencyKey: campaignId, ttlSeconds: 60 },
+);
+
+if (lease.ok) {
+  const sent = await deliverCampaign(recipients);
+  await lease.commit({ "sends": sent.length });
+}`;
+---
+
+<Base description="Pre-flight budget enforcement over HTTP. One call, atomic across budgets, and the answer is yes or no.">
+  <div class="wrap-wide">
+    <h1 class="tagline">Hold your horses.</h1>
+
+    <p class="lede">
+      Budget enforcement that happens <strong>before</strong> the spend, not on next month's
+      invoice. One HTTP call, atomic across budgets, and the answer is yes or no.
+    </p>
+
+    <p class="story">
+      A recursive function with a missing break statement can do <a
+        href="https://medium.com/milkie-way/we-burnt-72k-testing-firebase-cloud-run-and-almost-went-bankrupt-part-2-8092a3bb773d"
+        rel="noopener">116 billion database reads before lunch</a
+      >. Nothing asks it to stop.
+    </p>
+
+    <div class="buttons">
+      <a class="btn" href="/keys">Get an API key</a>
+      <GitHubLink label="View on GitHub" class="btn btn-secondary gh" />
+    </div>
+
+    <ExampleSlab />
+
+    <h2>Declare your budgets</h2>
+    <p class="story">
+      Limits travel inline with every draw, so there is no setup call and no migration. Change a
+      constant, deploy, done.
+    </p>
+    <Code code={declare} lang="ts" theme="css-variables" />
+
+    <h2>Ask before you spend</h2>
+    <p class="story">
+      Budgets in a group are drawn together or not at all. A refusal is a returned value, not a
+      thrown error.
+    </p>
+    <Code code={draw} lang="ts" theme="css-variables" />
+
+    <h2>Or settle up afterwards</h2>
+    <p class="story">
+      Hold an estimate, then commit what it actually cost. Crash instead, and the hold expires on
+      its own.
+    </p>
+    <Code code={reserve} lang="ts" theme="css-variables" />
+  </div>
+</Base>

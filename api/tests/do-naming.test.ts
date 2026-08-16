@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { doName } from "../src/index.ts";
+import { doName } from "../src/serve.ts";
 import { ID_PATTERN } from "../src/schema.ts";
 
 /** Every tenant and group value a validated request can carry. */

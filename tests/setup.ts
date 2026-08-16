@@ -31,7 +31,7 @@ export default async function setup(project: TestProject): Promise<(() => void) 
 
   const server = spawn(
     "pnpm",
-    ["--filter", "@horse-holder/api", "exec", "wrangler", "dev", "--port", String(PORT)],
+    ["--filter", "@horse-holder/site", "exec", "wrangler", "dev", "--port", String(PORT)],
     {
       cwd: new URL("..", import.meta.url),
       // Its own process group: `wrangler dev` runs workerd as a child, and killing the group

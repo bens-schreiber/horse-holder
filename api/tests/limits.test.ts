@@ -6,7 +6,7 @@
 import { SELF, env, runInDurableObject } from "cloudflare:test";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { doName } from "../src/index.ts";
+import { doName } from "../src/serve.ts";
 import {
   IDEMPOTENCY_RETENTION_MS,
   RESERVATION_DEFAULT_TTL_SECONDS,

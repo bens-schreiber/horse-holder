@@ -1,8 +1,9 @@
 API := pnpm --filter @horse-holder/api exec
+SITE := pnpm --filter @horse-holder/site exec
 SPEC := pnpm --filter @horse-holder/spec-tests exec
 STAMP := node_modules/.install-stamp
 
-.PHONY: build-client check clean default dev example fmt fmt-check install lint lint-fix test test-impl test-spec typecheck types watch
+.PHONY: build-client check clean default dev example fmt fmt-check install lint lint-fix site-build site-dev test test-impl test-spec typecheck types watch
 
 default: test
 
@@ -22,6 +23,7 @@ typecheck: api/worker-configuration.d.ts
 	pnpm exec tsc --noEmit -p api/tsconfig.json
 	pnpm exec tsc --noEmit -p tests/tsconfig.json
 	pnpm exec tsc --noEmit -p client/ts/tsconfig.json
+	pnpm exec tsc --noEmit -p site/tsconfig.json
 
 # Builds @horse-holder/client to client/ts/dist. Plain tsc, no bundler.
 build-client: $(STAMP)
@@ -42,8 +44,9 @@ lint-fix: $(STAMP)
 test: test-impl test-spec
 
 # The vendor-neutral suite. Boots our server on port 8799 by default; set HH_BASE_URL to run
-# the same tests against another implementation instead.
-test-spec: $(STAMP)
+# the same tests against another implementation instead. One Worker serves the site and the
+# API, so the suite needs the site built before it can boot one.
+test-spec: site-build
 	$(SPEC) vitest run
 
 test-impl: api/worker-configuration.d.ts
@@ -52,8 +55,18 @@ test-impl: api/worker-configuration.d.ts
 watch: api/worker-configuration.d.ts
 	$(API) vitest
 
-dev: api/worker-configuration.d.ts
-	$(API) wrangler dev --port $(PORT)
+# Durable Objects need a real Worker, which means a built site and no HMR. Use `site-dev` for
+# working on the look of the static pages; use this for anything touching `/v1/*`.
+dev: site-build
+	$(SITE) wrangler dev --port $(PORT)
+
+# HMR for the static pages. The adapter's platform proxy cannot instantiate a Durable Object
+# defined in this same Worker, so `/v1/*` does not work here.
+site-dev: $(STAMP)
+	$(SITE) astro dev
+
+site-build: $(STAMP)
+	$(SITE) astro build
 
 # The client's test surface: tests/examples/run.ts drives every file in examples/ts and asserts
 # none of them threw. Needs a live server, so it is not part of `check`: run `make dev` in

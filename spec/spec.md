@@ -763,7 +763,7 @@ depends on it.
 This protocol deliberately omits several concerns so implementations can layer them
 without diverging from the wire format.
 
-**Authentication.** The *scheme* is implementation-defined; the *placement* is not.
+**Authentication.** The _scheme_ is implementation-defined; the _placement_ is not.
 
 A conforming server MAY require API keys, OAuth, mTLS, a signed header, or nothing at all.
 This document does not say how a credential is minted, what it looks like, how long it
@@ -776,7 +776,7 @@ predict that cannot be written once and pointed at an arbitrary implementation.
    this protocol; servers SHOULD use the `Bearer <token>` form of RFC 6750 so that the
    commonest client configuration works with no per-server adaptation.
 
-   A server MAY *additionally* accept a credential elsewhere (mTLS at the transport layer, a
+   A server MAY _additionally_ accept a credential elsewhere (mTLS at the transport layer, a
    vendor header) as long as `authorization` alone is always sufficient.
 
 2. **Always sendable.** A caller MAY send `authorization` on every request to every endpoint,
@@ -794,7 +794,7 @@ predict that cannot be written once and pointed at an arbitrary implementation.
    exactly one **scope** (§1), and the resolution MUST be the server's alone. This protocol
    defines no header, field, or path segment by which a caller names its own scope, and an
    implementation MUST NOT define one: a scope a caller can ask for is a scope a caller can
-   ask for someone else's. Callers subdivide with `hh-tenant` (§1), which lives *inside* the
+   ask for someone else's. Callers subdivide with `hh-tenant` (§1), which lives _inside_ the
    scope the credential resolved to and therefore grants nothing.
 
 4. **Rejection is uniform.** A server MUST respond `401` with code `unauthenticated` when

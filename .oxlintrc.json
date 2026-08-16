@@ -14,6 +14,7 @@
   },
   "ignorePatterns": [
     "**/worker-configuration.d.ts",
+    "**/*.astro",
     "**/node_modules/**",
     "**/.wrangler/**",
     "**/dist/**"

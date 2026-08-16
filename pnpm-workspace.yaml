@@ -2,7 +2,19 @@ packages:
   - "api"
   - "tests"
   - "client/ts"
+  - "site"
+
+# `@cloudflare/vitest-pool-workers` runs the tests inside workerd and asserts it is the same
+# vitest instance the runner started. pnpm installs one copy per peer combination, so a
+# dependency that drags in new peers can leave a second copy behind on an incremental install;
+# the pool then loads the wrong one and every test in `api/tests/` fails with "Expected Vitest
+# to start running before importing modules." If that happens, delete the `node_modules`
+# directories and reinstall. `@astrojs/check` provoked it, which is why `make typecheck` uses
+# plain `tsc` on `site/` instead.
+dedupePeerDependents: true
 
 allowBuilds:
   esbuild: true
+  # The site has no images to optimize, so Astro never reaches for sharp.
+  sharp: false
   workerd: true

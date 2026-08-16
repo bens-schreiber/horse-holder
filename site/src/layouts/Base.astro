@@ -1,0 +1,49 @@
+---
+import GitHubLink from "../components/GitHubLink.astro";
+import { source } from "../repo.ts";
+import "../styles/global.css";
+
+interface Props {
+  description: string;
+}
+
+const { description } = Astro.props;
+
+/** Every page, no per-page suffix. There are two of them and both are Horse Holder. */
+const TITLE = "Horse Holder";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{TITLE}</title>
+    <meta name="description" content={description} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <div class="wrap-wide">
+      <nav class="nav">
+        <a class="brand" href="/">horse holder</a>
+        <div class="nav-links">
+          <a href="/keys">API key</a>
+          <GitHubLink />
+        </div>
+      </nav>
+    </div>
+
+    <main>
+      <slot />
+    </main>
+
+    <div class="wrap-wide">
+      <footer class="footer">
+        <span>MIT</span>
+        <a href="/keys">API key</a>
+        <a href={source("client/ts/README.md")} rel="noopener">Client</a>
+        <GitHubLink />
+      </footer>
+    </div>
+  </body>
+</html>

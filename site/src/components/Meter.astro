@@ -1,0 +1,30 @@
+---
+interface Props {
+  name: string;
+  used: number;
+  limit: number;
+  display: string;
+  exceeded?: boolean;
+}
+
+const { name, used, limit, display, exceeded = false } = Astro.props;
+const percent = Math.min(100, Math.round((used / limit) * 100));
+---
+
+<div class:list={["meter", { "meter-exceeded": exceeded }]}>
+  <div class="meter-head">
+    <span class="meter-name">{name}</span>
+    <span class="meter-value">{exceeded ? "EXCEEDED" : display}</span>
+  </div>
+  <div
+    class="meter-track"
+    role="meter"
+    aria-label={name}
+    aria-valuenow={used}
+    aria-valuemin="0"
+    aria-valuemax={limit}
+    aria-valuetext={`${display}${exceeded ? ", exceeded" : ""}`}
+  >
+    <div class="meter-fill" style={`--fill: ${percent}%`}></div>
+  </div>
+</div>

@@ -12,7 +12,8 @@ the storage tier only by typed RPC, so nothing downstream re-parses the wire for
 ## Layout
 
 ```
-api/src/index.ts       Worker: routing, validation, and RPC dispatch
+api/src/index.ts       Worker entry for the standalone API: fetch handler plus the DO export
+api/src/serve.ts       Routing, validation, and RPC dispatch
 api/src/auth.ts        Bearer API keys, one scope each
 api/src/budget.ts      BudgetGroup DO: all protocol semantics, reached by RPC
 api/src/expiry.ts      The deadline heap that drives expiry, renewal, and reclamation
@@ -24,7 +25,27 @@ tests/*.ts             Its scaffolding: server setup, harness, request vocabular
 client/ts/             TypeScript client for the protocol, vendor-neutral, zero deps
 examples/ts/           Runnable client examples, one per file, nothing else
 tests/examples/        The driver that runs them and asserts they pass
+site/                  The website, and the Worker that serves it and the API
 ```
+
+[api/](api/) is standalone: `wrangler deploy` from that directory publishes the whole API and
+nothing else, and no file in it imports from `site/`. See [api/README.md](api/README.md) for
+deploying it by itself.
+
+The website is an optional front end over that same code rather than a second implementation.
+Astro owns routing; `site/src/pages/v1/[...path].ts` delegates every API request to `serve()` in
+`api/src/serve.ts`, unchanged. `site/worker.ts` is the entry `wrangler` deploys for the site: it
+re-exports Astro's handler alongside the `BudgetGroup` Durable Object, which has to be exported
+from the Worker's own entry point. So one Worker serves both the pages and `/v1/*`, and same
+origin means no CORS, no allowlist, and no API URL for the site to configure.
+
+`serve.ts` is split from `index.ts` so the handler carries no value import of the Durable Object
+class. `budget.ts` imports `cloudflare:workers`, which resolves only inside workerd; a handler
+that pulled it in could not be loaded by `astro dev`'s Vite SSR, which is what `/keys` needs.
+
+The front page is prerendered and served from the assets binding at no compute cost. `/keys` is
+the one page with behavior: a plain form that POSTs to itself and issues an account and its first
+key. The site ships zero client JavaScript, which is why its CSP can be `script-src 'none'`.
 
 `examples/ts` deliberately sits outside every workspace package, so that an example reads
 exactly like calling code in someone else's project. That is why the root `package.json`
@@ -35,17 +56,29 @@ depends on `@horse-holder/client`: it is what resolves the import for those file
 Everything runs from the `Makefile` at the repo root; there is no `scripts` block in any
 `package.json`.
 
-| Command             | Does                                                  |
-| ------------------- | ----------------------------------------------------- |
-| `make test`         | Both suites (the default target)                      |
-| `make test-spec`    | Conformance suite only                                |
-| `make test-impl`    | Implementation suite only                             |
-| `make check`        | Types, format, lint, typecheck, and both suites       |
-| `make dev`          | `wrangler dev` on port 8787, for manual smoke testing |
-| `make fmt`          | Format in place                                       |
-| `make watch`        | Tests in watch mode                                   |
-| `make build-client` | Build `@horse-holder/client` to `client/ts/dist`      |
-| `make example`      | Run the client examples against a live server         |
+| Command             | Does                                                 |
+| ------------------- | ---------------------------------------------------- |
+| `make test`         | Both suites (the default target)                     |
+| `make test-spec`    | Conformance suite only                               |
+| `make test-impl`    | Implementation suite only                            |
+| `make check`        | Types, format, lint, typecheck, and both suites      |
+| `make dev`          | Build the site, then `wrangler dev` on port 8787     |
+| `make site-dev`     | `astro dev` with HMR, for the look of the front page |
+| `make site-build`   | Build the site to `site/dist`                        |
+| `make fmt`          | Format in place                                      |
+| `make watch`        | Tests in watch mode                                  |
+| `make build-client` | Build `@horse-holder/client` to `client/ts/dist`     |
+| `make example`      | Run the client examples against a live server        |
+
+`make dev` and `make site-dev` trade off against each other. The Astro adapter's platform proxy
+cannot instantiate a Durable Object defined in the same Worker, so under `astro dev` every page
+renders and `/keys` issues keys, but the endpoints that draw on a budget do not work. Use
+`site-dev` for the look of the pages, and `dev` for anything that touches a budget. `make
+test-spec` builds the site first, since the Worker it boots serves both.
+
+`site/wrangler.dev.jsonc` is why `site-dev` boots without warnings: it is the bindings config
+the platform proxy reads, identical to `site/wrangler.jsonc` minus the Durable Object that only
+the deployed Worker can export.
 
 ## Using it
 

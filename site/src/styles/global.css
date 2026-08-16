@@ -1,0 +1,487 @@
+/*
+ * The whole design system. Light, mono-forward, one accent.
+ *
+ * Every color is a token defined once here, so nothing below this block names a color.
+ */
+
+:root {
+  --bg: #fbfaf8;
+  --surface: #ffffff;
+  --border: #e4e0d9;
+  --text: #1a1a18;
+  --muted: #6b6862;
+  --accent: #9a6320;
+  --accent-soft: #f2e6d4;
+  --warn: #8a6d1f;
+  --exceeded: #a33224;
+
+  /*
+   * Shiki highlights at build time with `theme: "css-variables"`, which emits these names and
+   * defines none of them. Defining them here is what colors the code blocks, in the same
+   * palette as everything else.
+   */
+  --astro-code-background: transparent;
+  --astro-code-foreground: #3c3a36;
+  --astro-code-token-comment: #8c8880;
+  --astro-code-token-keyword: #9a4f2c;
+  --astro-code-token-string: #4a6b3a;
+  --astro-code-token-string-expression: #4a6b3a;
+  --astro-code-token-function: #7a5230;
+  --astro-code-token-constant: #2f5d7c;
+  --astro-code-token-parameter: #3c3a36;
+  --astro-code-token-punctuation: #8c8880;
+  --astro-code-token-link: #9a6320;
+
+  /* Light only, so say so: UA widgets and scrollbars follow this rather than the OS setting. */
+  color-scheme: light;
+
+  --measure: 68ch;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --radius: 6px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-text-size-adjust: 100%;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+
+h1 {
+  font-size: clamp(2.2rem, 6vw, 3.2rem);
+}
+
+h2 {
+  font-size: 1.5rem;
+  margin-top: 3rem;
+}
+
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+code,
+kbd,
+pre {
+  font-family: var(--mono);
+  font-size: 0.875em;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Layout ------------------------------------------------------------------ */
+
+.wrap {
+  max-width: var(--measure);
+  margin-inline: auto;
+  padding-inline: 1.25rem;
+}
+
+/* The hero slab is wider than prose measure, so it gets its own container. */
+.wrap-wide {
+  max-width: 900px;
+  margin-inline: auto;
+  padding-inline: 1.25rem;
+}
+
+main {
+  padding-block: 2rem 5rem;
+}
+
+/* Nav and footer ---------------------------------------------------------- */
+
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  font-size: 0.9rem;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+
+.brand-mark {
+  color: var(--accent);
+  font-size: 1.1rem;
+}
+
+.footer {
+  border-top: 1px solid var(--border);
+  padding-block: 2rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+}
+
+/* The GitHub mark is inline SVG, so it costs no request and inherits color. */
+.gh {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  text-decoration: none;
+  color: inherit;
+}
+
+.gh:hover {
+  color: var(--accent);
+}
+
+.gh svg {
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+}
+
+/* Hero -------------------------------------------------------------------- */
+
+.tagline {
+  margin-block: 2.5rem 0.75rem;
+}
+
+.lede {
+  font-size: 1.15rem;
+  color: var(--text);
+  max-width: 60ch;
+}
+
+.lede strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.story {
+  color: var(--muted);
+  max-width: 62ch;
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-block: 1.75rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.1rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  font-size: 0.95rem;
+  text-decoration: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.btn-secondary {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.btn-secondary:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Code blocks ------------------------------------------------------------- */
+
+pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  overflow-x: auto;
+  line-height: 1.55;
+}
+
+/* A 50-character API key does not fit on one line; wrap rather than scroll it out of sight. */
+.wrap-code {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+:not(pre) > code {
+  background: var(--accent-soft);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+
+/* The example slab -------------------------------------------------------- */
+
+.slab {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface);
+  margin-block: 3rem;
+}
+
+.slab > * {
+  padding: 1.25rem;
+  min-width: 0;
+}
+
+.slab-code {
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+
+/* Astro's <Code> ships its own background; the slab supplies it instead. */
+.slab-code pre {
+  background: transparent !important;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.slab-label {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 0.75rem;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  margin-bottom: 1.5rem;
+}
+
+.status-code {
+  color: var(--exceeded);
+  font-weight: 700;
+}
+
+.status-text {
+  color: var(--muted);
+}
+
+.verdict {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.verdict strong {
+  color: var(--accent);
+}
+
+@media (max-width: 720px) {
+  .slab {
+    grid-template-columns: 1fr;
+  }
+
+  .slab-code {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+/* Meters ------------------------------------------------------------------ */
+
+.meter {
+  margin-bottom: 1.1rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.meter-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.4rem;
+}
+
+.meter-name {
+  color: var(--text);
+}
+
+.meter-value {
+  color: var(--muted);
+}
+
+.meter-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  width: var(--fill);
+  border-radius: 3px;
+  background: var(--accent);
+  transform-origin: left;
+}
+
+.meter-exceeded .meter-fill {
+  background: var(--exceeded);
+}
+
+.meter-exceeded .meter-value {
+  color: var(--exceeded);
+  font-weight: 600;
+}
+
+/*
+ * Fill once on load. Nothing else on the site moves.
+ *
+ * Scaled rather than widened: a `width` keyframe animating to `var(--fill)` does not resolve
+ * reliably, and it left the bar stuck at its from-state. This also stays off the layout path.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .meter-fill {
+    animation: fill 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  @keyframes fill {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+}
+
+/* Keys page --------------------------------------------------------------- */
+
+.key-box {
+  display: block;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin-block: 0.5rem 1rem;
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  word-break: break-all;
+  /* One click selects the whole key, which is the copy button without the script. */
+  user-select: all;
+}
+
+.warning {
+  border-left: 3px solid var(--warn);
+  background: var(--accent-soft);
+  padding: 0.85rem 1rem;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin-block: 1.5rem;
+  font-size: 0.9rem;
+}
+
+.field-label {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  display: block;
+  margin-top: 1.5rem;
+}
+
+.error {
+  border-left: 3px solid var(--exceeded);
+  background: var(--surface);
+  padding: 0.85rem 1rem;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin-block: 1.5rem;
+  color: var(--text);
+}
+
+/* Prose (docs) ------------------------------------------------------------ */
+
+.prose h2 {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.4rem;
+}
+
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  margin-block: 1.5rem;
+  display: block;
+  overflow-x: auto;
+}
+
+.prose th,
+.prose td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.prose th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.prose blockquote {
+  margin-inline: 0;
+  padding-left: 1rem;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+}

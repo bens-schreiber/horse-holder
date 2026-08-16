@@ -2,6 +2,10 @@
   "name": "@horse-holder/api",
   "private": true,
   "type": "module",
+  "exports": {
+    "./serve.ts": "./src/serve.ts",
+    "./budget.ts": "./src/budget.ts"
+  },
   "dependencies": {
     "better-result": "^3.0.1",
     "zod": "^4.4.3"
