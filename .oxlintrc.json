@@ -1,0 +1,12 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "promise"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error"
+  },
+  "rules": {
+    "curly": ["error", "all"]
+  },
+  "ignorePatterns": ["**/worker-configuration.d.ts", "**/node_modules/**", "**/.wrangler/**"]
+}

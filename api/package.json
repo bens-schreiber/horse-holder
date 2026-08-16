@@ -1,0 +1,14 @@
+{
+  "name": "@horse-holder/api",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "better-result": "^3.0.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.9.0",
+    "wrangler": "^4.42.0"
+  }
+}

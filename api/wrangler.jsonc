@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "horse-holder",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "durable_objects": {
+    "bindings": [{ "name": "BUDGETS", "class_name": "BudgetGroup" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BudgetGroup"] }],
+  "kv_namespaces": [{ "binding": "API_KEYS", "id": "api_keys_placeholder" }],
+}

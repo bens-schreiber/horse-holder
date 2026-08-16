@@ -1,0 +1,8 @@
+packages:
+  - "api"
+  - "tests"
+
+allowBuilds:
+  esbuild: true
+  sharp: false
+  workerd: true
