@@ -1,58 +1,39 @@
 # @horse-holder/client
 
-A zero-dependency TypeScript client for [Horse Holder v1](../../spec/spec.md): pre-flight budget
-enforcement over HTTP.
+Zero-dependency TypeScript client for [Horse Holder v1](https://github.com/bens-schreiber/horse-holder/blob/main/spec/spec.md). Ask before you spend.
 
-It is written against the protocol rather than against any particular server. It speaks the five
-endpoints and knows nothing about accounts, API key issuance, or storage, so pointing `baseUrl`
-at any conforming implementation is the whole of the porting effort.
+It speaks the five endpoints and knows nothing about accounts, keys, or storage. Point `baseUrl` at any conforming server and keep your code.
 
-## Install
-
-```
-pnpm add @horse-holder/client
+```bash
+npm install @horse-holder/client
 ```
 
-## The group is the unit
+## Declare your budgets
 
-A **group** is the atomicity domain. It travels in a required header, it is part of every
-budget's identity, and a draw cannot span groups because there is no way to express one. So a
-group, not a budget, is this client's primary object: you declare a group once with its member
-budgets, then draw against those members.
+Budgets live in a group, and the group is what a draw is atomic across. Everything in one either goes through together or not at all, and no single draw can reach across two of them.
+
+So you declare a group once, then spend against it.
 
 ```ts
 import { HorseHolderClient, renewal } from "@horse-holder/client";
 
-const hhldr = new HorseHolderClient({
+const hh = new HorseHolderClient({
   baseUrl: process.env.HORSEHOLDER_URL!,
   apiKey: process.env.HORSEHOLDER_API_KEY,
-  tenant: "my-tenant",
 });
 
-const r2 = hhldr.group({
+const r2 = hh.group({
   id: "r2",
   budgets: {
-    "put-ops": {
-      limit: 1_000,
-      warnings: [0.1, 0.5, 0.8],
-      renewal: renewal.daily({ timezone: "America/Chicago" }),
-    },
-    "storage-bytes": {
-      limit: 1_000_000,
-      warnings: [0.8],
-      renewal: renewal.monthly({ timezone: "America/Chicago" }),
-    },
+    "put-ops": { limit: 1_000, warnings: [0.5, 0.8], renewal: renewal.daily() },
+    "storage-bytes": { limit: 1_000_000, renewal: renewal.monthly() },
   },
 });
 ```
 
-`group()` performs no I/O. Definitions travel inline with every draw, so this is simply the one
-place they live, which is what stops two call sites from disagreeing about what the limit is. It
-validates eagerly and captures the budget ids as literal types, so every call below is checked
-against them.
+`group()` does no I/O. Limits ride along with every draw, so this is just the one place they live, which is what stops two call sites from disagreeing. It captures the budget ids as literal types, so everything below is checked against them.
 
-Because it is pure, per-customer limits are ordinary code: build a group from a plan tier or a
-customer record at request time.
+It is also pure, so per-plan limits are ordinary code. Build a group from a customer record at request time.
 
 ## Cost known up front
 
@@ -68,25 +49,22 @@ if (!result.ok) {
   return;
 }
 
-result.get("put-ops").remaining; // always returns a value, never undefined
+result.get("put-ops").remaining; // never undefined
 
 for (const { id, thresholds } of result.warningsCrossed) {
   console.warn(`${id} crossed ${thresholds.join(", ")}`);
 }
 ```
 
-Running out of budget is a **value, not an exception**. Being told no is the client working
-correctly and the reason you called, so it comes back as `ok: false` with every budget's state
-attached, including the ones that were fine.
+Running out is a value, not an exception. Being told no is the client working correctly and the reason you called.
 
-Every response covers the **whole group**, not only the budgets you drew from, so `get()` always
-has an answer for any budget in the group and never returns `undefined`.
+Every response covers the whole group, not just the budgets you drew from, so `get()` always has an answer.
 
-## Cost known only afterward
+## Cost known later
 
 ```ts
 const lease = await r2.reserve(
-  { "put-ops": 1, "storage-bytes": 1_000 },
+  { "storage-bytes": estimate },
   { idempotencyKey: `upload-${uploadId}`, ttlSeconds: 60 },
 );
 
@@ -101,85 +79,72 @@ try {
 }
 ```
 
-The successful branch of `reserve` _is_ the lease, so one `ok` check both handles the refusal and
-gives you the verbs to settle with. Any budget left out of a correction commits at its reserved
-amount: omission means "the estimate was right," never "release this one."
+Crash before either one and the hold expires by itself. Your capacity comes home.
 
-The lease also remembers **which** budgets it held, in the type. Correcting one it never
-reserved is a compile error, not a rejected request:
+Leave a budget out of a correction and it commits at what it reserved. Omission means the estimate was right, never "release this one."
+
+The lease remembers what it held, in the type:
 
 ```ts
-const lease = await r2.reserve({ "put-ops": 1 }, { idempotencyKey: key, ttlSeconds: 60 });
-if (!lease.ok) return;
-
-await lease.commit({ "put-ops": 2 }); // fine
-await lease.commit({ "storage-bytes": 1 }); // compile error: not part of this reservation
+await lease.commit({ "put-ops": 2 }); // compile error, that was never reserved
 ```
 
-When the settlement crosses a process boundary, use `r2.commit(reservationId, corrections?)` and
-`r2.release(reservationId)` directly. The lease is sugar over exactly those.
+Settling somewhere else entirely? `r2.commit(reservationId, corrections?)` and `r2.release(reservationId)` do the same job without the lease.
 
 ## Reading
 
 ```ts
-const state = await r2.read(); // the whole group, one request
+const state = await r2.read(); // whole group, one request
 
 for (const budget of state.budgets) {
   console.log(`${budget.id}: ${budget.used}/${budget.limit}`);
 }
-
-state.get("put-ops")?.used;
 ```
 
-One request gets the entire group, and every number in it describes the same moment. Budgets you
-have declared but never drawn from are not in `budgets`, since they do not exist on the server
-until something spends from them, so `get()` on a read returns `BudgetState | undefined`.
+Every number describes the same moment. Budgets you declared but never drew from do not exist on the server yet, so `get()` here can return `undefined`.
 
 ## Tenants
 
-`r2.tenant("acme")` returns the same group bound to another tenant, sharing one transport. A
-per-call `tenant` overrides it.
+`r2.tenant("acme")` points the same group at somebody else. Same declaration, same connection, separate money. A per-call `tenant` beats it.
 
-The absent-versus-empty distinction lives in the type, because those are **different budgets**
-and HTTP libraries love to collapse them silently:
+Absent and empty are different tenants, and HTTP libraries love to quietly collapse the two, so the type keeps them apart:
 
-| You write      | The client sends                 | Which addresses                     |
-| -------------- | -------------------------------- | ----------------------------------- |
-| nothing        | no `hh-tenant` header            | inherit the client or group default |
-| `tenant: null` | no `hh-tenant` header            | the scope's default tenant          |
-| `tenant: ""`   | `hh-tenant:` with an empty value | an ordinary tenant named `""`       |
+| You write      | Sends                     | Which means                   |
+| -------------- | ------------------------- | ----------------------------- |
+| nothing        | no `hh-tenant` header     | inherit the client or group   |
+| `tenant: null` | no `hh-tenant` header     | the scope's default tenant    |
+| `tenant: ""`   | `hh-tenant:` with nothing | an ordinary tenant named `""` |
 
-## Errors
+## Errors and retries
 
-Everything except running out of budget throws a single `HorseHolderError` carrying `status`,
-`code`, `message`, and `body`, with `status` null for network failures and timeouts. One class
-with a `code` string rather than a subclass tree, because any implementation may define codes
-this client has never heard of, and a closed union of subclasses would make those
-unrepresentable.
+Everything except running out throws one `HorseHolderError` with `status`, `code`, `message`, and `body`. `status` is null for network failures and timeouts.
 
 ```ts
-import { isHorseHolderError, type ErrorCode } from "@horse-holder/client";
+import { isHorseHolderError } from "@horse-holder/client";
 
 try {
   await lease.commit();
 } catch (error) {
   if (isHorseHolderError(error) && error.code === "reservation_not_found") {
-    // the hold expired; treat the operation as unbudgeted and start over
+    // hold expired, treat it as unbudgeted and start over
   }
   throw error;
 }
 ```
 
-`ErrorCode` is a union of the standard codes, for an exhaustive `switch` over the ones every
-server is expected to use.
+One class with a `code` string, not a subclass tree, because any server may define codes this client has never heard of.
 
-## Client options
+Network blips, `408`, `429`, `5xx`, and `409 idempotency_in_progress` retry with backoff and jitter, honoring `retry-after`. A `402` never does, because that is an answer, not a failure.
+
+Your idempotency keys are what make retries safe. Generate one per operation, not per attempt.
+
+## Options
 
 ```ts
 new HorseHolderClient({
   baseUrl, // required, "/v1" is appended for you
   apiKey, // sugar for `authorization: Bearer <key>`
-  headers, // static record or sync/async function, for any other auth scheme
+  headers, // record or sync/async function, for any other auth scheme
   tenant, // default tenant
   fetch, // injected, defaults to globalThis.fetch
   timeoutMs, // default 10_000, overridable per call
@@ -190,20 +155,8 @@ new HorseHolderClient({
 
 Every method also takes `tenant`, `signal`, `headers`, and `timeoutMs`.
 
-**Retries.** Network errors, `408`, `429`, `5xx`, and `409 idempotency_in_progress` retry with
-exponential backoff and jitter, honoring `retry-after`. Nothing else does: never a `402`, never
-another `4xx`. This is safe precisely because the idempotency keys are yours and are reused
-across attempts, so a replayed draw returns the original result rather than charging twice.
-Generate one key per logical operation, not per attempt.
+More in [examples/ts](https://github.com/bens-schreiber/horse-holder/tree/main/examples/ts): seven runnable files, seven different services, each one asserts its own outcome.
 
-**Client-side validation** is limited to what the protocol mandates, so it holds against every
-implementation: the identifier charset, 1 to 16 amounts per draw, `limit > 0`, `0 < warning < 1`,
-and finite non-negative amounts. Group-spanning draws, duplicate ids, unknown budget ids, and
-corrections outside their reservation are prevented by the types instead of being checked at
-runtime.
+## License
 
-## Examples and tests
-
-The test surface is [examples/](../../examples): seven examples across seven different services,
-each a standalone file importing only `node:assert` and this client. Every one prints what it
-did and asserts the outcome. `make dev` in one terminal, `make example` in another.
+[MIT](https://github.com/bens-schreiber/horse-holder/blob/main/LICENSE). Go hold whatever horses you like.

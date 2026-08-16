@@ -1,0 +1,84 @@
+# The filename is load-bearing: npm's trusted publisher config pins the exact workflow filename,
+# and renaming this file silently breaks publishing until the registry config is updated to match.
+name: Publish client to npm
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - client/ts/**
+
+permissions: {}
+
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/verify.yml
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      published: ${{ steps.version.outputs.published }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+
+      - run: make build-client
+
+      # Trusted publishing needs npm >= 11.5.1. Asserting it beats trusting whatever npm the
+      # current Node tarball happens to bundle, since a silent downgrade would fail with an opaque
+      # auth error rather than a version error.
+      - name: Pin a trusted-publishing-capable npm
+        run: |
+          npm install -g "npm@^11.5.1"
+          npm --version
+
+      - name: Check whether this version is already published
+        id: version
+        run: |
+          version="$(node -p "require('./client/ts/package.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if npm view "@horse-holder/client@$version" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::@horse-holder/client@$version is already on the registry; nothing to do."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Publishing @horse-holder/client@$version."
+          fi
+
+      - name: Publish
+        if: steps.version.outputs.published == 'false'
+        working-directory: client/ts
+        run: npm publish
+
+  tag:
+    needs: publish
+    if: needs.publish.outputs.published == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Tag the released commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f "ref=refs/tags/client-v$VERSION" \
+            -f "sha=$GITHUB_SHA"
