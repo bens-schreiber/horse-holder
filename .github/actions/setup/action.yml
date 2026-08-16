@@ -1,0 +1,22 @@
+name: Setup toolchain
+description: >
+  Installs pnpm and Node at the versions pinned in the repo, then installs workspace dependencies.
+  Local composite action, so it is covered by branch protection like any other file here and adds
+  nothing to the third-party supply chain.
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      with:
+        run_install: false
+
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version-file: .nvmrc
+        cache: pnpm
+
+    - run: make install
+      shell: bash
+      env:
+        npm_config_frozen_lockfile: "true"

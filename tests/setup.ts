@@ -8,6 +8,9 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { TestProject } from "vitest/node";
 
@@ -29,9 +32,26 @@ export default async function setup(project: TestProject): Promise<(() => void) 
     return undefined;
   }
 
+  // Durable Object and KV writes land here. It has to sit outside the repo: `wrangler dev` keeps
+  // esbuild running in watch mode over the project tree, and the write storm this suite produces
+  // against the default `site/.wrangler/state` retriggers the bundler until esbuild deadlocks and
+  // takes the dev server down mid-run. A fresh directory per run also guarantees the suite starts
+  // from empty state instead of inheriting budgets from the last one.
+  const persistTo = mkdtempSync(join(tmpdir(), "horse-holder-spec-"));
+
   const server = spawn(
     "pnpm",
-    ["--filter", "@horse-holder/site", "exec", "wrangler", "dev", "--port", String(PORT)],
+    [
+      "--filter",
+      "@horse-holder/site",
+      "exec",
+      "wrangler",
+      "dev",
+      "--port",
+      String(PORT),
+      "--persist-to",
+      persistTo,
+    ],
     {
       cwd: new URL("..", import.meta.url),
       // Its own process group: `wrangler dev` runs workerd as a child, and killing the group

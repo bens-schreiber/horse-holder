@@ -1,7 +1,7 @@
 {
   "name": "@horse-holder/client",
-  "version": "1.0.0",
-  "description": "Zero-dependency TypeScript client for the Horse Holder v1 protocol",
+  "version": "0.1.1",
+  "description": "TypeScript client for the Horse Holder v1 protocol",
   "keywords": [
     "budget",
     "horse-holder",
@@ -12,7 +12,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bschreib/horse-holder.git",
+    "url": "git+https://github.com/bens-schreiber/horse-holder.git",
     "directory": "client/ts"
   },
   "files": [
@@ -27,5 +27,8 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

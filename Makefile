@@ -3,7 +3,7 @@ SITE := pnpm --filter @horse-holder/site exec
 SPEC := pnpm --filter @horse-holder/spec-tests exec
 STAMP := node_modules/.install-stamp
 
-.PHONY: build-client check clean default dev example fmt fmt-check install lint lint-fix site-build site-dev test test-impl test-spec typecheck types watch
+.PHONY: build-client check clean default deploy-dry-run deploy-production deploy-staging dev example fmt fmt-check install lint lint-fix site-build site-dev smoke test test-impl test-spec typecheck types watch
 
 default: test
 
@@ -67,6 +67,31 @@ site-dev: $(STAMP)
 
 site-build: $(STAMP)
 	$(SITE) astro build
+
+# CI calls these, but they are plain wrangler: export a scoped CLOUDFLARE_API_TOKEN and you can run
+# the identical deploy from a laptop. Each environment is its own Worker script with its own KV
+# namespace and Durable Object storage, so these never touch each other's state.
+deploy-staging: site-build
+	$(SITE) wrangler deploy --env staging
+
+deploy-production: site-build
+	$(SITE) wrangler deploy --env production
+
+# Typechecks the Worker config and bundles the script without contacting Cloudflare, so a broken
+# wrangler.jsonc fails on a PR instead of at deploy time. Needs the site built first because
+# site/worker.ts imports ./dist/_worker.js/index.js.
+deploy-dry-run: site-build
+	$(SITE) wrangler deploy --env production --dry-run
+
+# Post-deploy verification, run against a live deployment. Needs no credentials: `/` proves the
+# asset binding is serving the built site, and an unrouted /v1/ path proves the Worker script itself
+# executed, since that 404 body comes from api/src/serve.ts and not from the asset handler.
+smoke:
+	@test -n "$(URL)" || { echo "smoke: set URL=https://<host>"; exit 1; }
+	@curl -fsS -o /dev/null -w "smoke: GET / -> %{http_code}\n" "$(URL)/"
+	@curl -sS "$(URL)/v1/__smoke" | grep -q "unknown endpoint" \
+		|| { echo "smoke: $(URL)/v1/__smoke did not return the Worker's 404 body"; exit 1; }
+	@echo "smoke: ok"
 
 # The client's test surface: tests/examples/run.ts drives every file in examples/ts and asserts
 # none of them threw. Needs a live server, so it is not part of `check`: run `make dev` in

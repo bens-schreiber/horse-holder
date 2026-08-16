@@ -1,0 +1,27 @@
+name: CI
+
+# `pull_request`, deliberately not `pull_request_target`. The latter runs with repo write scope and
+# secret access against untrusted fork code, which is the usual way a PR gate gets turned into a
+# credential exfiltration primitive. Nothing in this pipeline touches a secret, so a hostile PR has
+# nothing to reach for.
+#
+# Also runs on push to main so the branch always has a current status and a merge that somehow
+# bypassed the gate is still visibly red.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # A called workflow cannot grant itself more than the caller holds, and the top-level
+  # `permissions: {}` above grants nothing, so the read scope checkout needs is handed down here.
+  check:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/verify.yml

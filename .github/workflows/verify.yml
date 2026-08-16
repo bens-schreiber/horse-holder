@@ -1,0 +1,30 @@
+name: Verify
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit-ish to verify. Empty means the ref that triggered the caller.
+        type: string
+        required: false
+        default: ""
+
+permissions: {}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+
+      - uses: ./.github/actions/setup
+
+      - run: make check
+      - run: make build-client
+      - run: make deploy-dry-run

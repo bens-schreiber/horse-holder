@@ -20,12 +20,12 @@ npm install @horse-holder/client
 ```ts
 import { HorseHolderClient, renewal } from "@horse-holder/client";
 
-const hhldr = new HorseHolderClient({
+const hh = new HorseHolderClient({
   baseUrl: "https://horseholder.dev",
   apiKey: process.env.HORSEHOLDER_API_KEY,
 });
 
-const storage = hhldr.group({
+const storage = hh.group({
   id: "r2-storage",
   budgets: {
     "put-ops": {
@@ -39,24 +39,22 @@ const storage = hhldr.group({
   },
 });
 
-const ok = await storage.charge(
-  { 
-    "put-ops": 1, 
-    "egress-bytes": object.size 
+const result = await storage.charge(
+  {
+    "put-ops": 1,
+    "egress-bytes": object.size,
   },
   { idempotencyKey: uploadId },
 );
 
-if (!ok.ok) {
-  return tooExpensive({ retryAfter: ok.retryAfter });
+if (!result.ok) {
+  return tooExpensive({ retryAfter: result.retryAfter });
 }
 
 await bucket.put(key, object);
 ```
 
 Both budgets go through, or neither does.
-
-Running out is a returned value, not a thrown error. Being told no is the whole reason you called.
 
 No setup call. No migration. Limits ride along with every draw, so changing one is changing a constant.
 
@@ -68,11 +66,11 @@ No setup call. No migration. Limits ride along with every draw, so changing one 
 Some budgets should never come back.
 
 ```ts
-const trial = hhldr.group({
+const trial = hh.group({
   id: "trial",
   budgets: {
-    // 100 free renders, ever. Not per month. Ever.
-    "renders": { limit: 100, renewal: renewal.never() },
+    // 100 free renders, ever.
+    renders: { limit: 100, renewal: renewal.never() },
   },
 });
 ```
@@ -84,7 +82,7 @@ const trial = hhldr.group({
 Windows reset on the clock rather than rolling continuously:
 
 ```ts
-const api = hhldr.group({
+const api = hh.group({
   id: "api-calls",
   budgets: {
     "per-minute": { limit: 60, renewal: renewal.seconds(60) },
@@ -112,7 +110,7 @@ if (!burst.ok) {
 `tenant()` re-points the same group at somebody else. Same declaration, same connection, separate money.
 
 ```ts
-const ci = hhldr.group({
+const ci = hh.group({
   id: "ci-builds",
   budgets: {
     "build-minutes": { limit: 500, renewal: renewal.monthly() },
@@ -132,7 +130,7 @@ Groups are pure, so per-plan limits are just code:
 ```ts
 const limits = { free: 100, pro: 5_000, enterprise: 1_000_000 };
 
-const seats = hhldr.group({
+const seats = hh.group({
   id: "seats",
   budgets: {
     "api-calls": { limit: limits[customer.plan], renewal: renewal.monthly() },
@@ -147,10 +145,10 @@ const quota = seats.tenant(customer.id);
 Thresholds fire on the way up, once per period.
 
 ```ts
-const mail = hhldr.group({
+const mail = hh.group({
   id: "email",
   budgets: {
-    "sends": {
+    sends: {
       limit: 200_000,
       warnings: [0.5, 0.8, 0.95],
       renewal: renewal.monthly(),
@@ -158,7 +156,7 @@ const mail = hhldr.group({
   },
 });
 
-const sent = await mail.charge({ "sends": batch.length }, { idempotencyKey: batchId });
+const sent = await mail.charge({ sends: batch.length }, { idempotencyKey: batchId });
 
 if (sent.ok) {
   for (const { id, thresholds } of sent.warningsCrossed) {
@@ -249,7 +247,7 @@ That deploys the API and nothing else. No file in `api/` imports from `site/`.
 Then point any client at it:
 
 ```ts
-const hhldr = new HorseHolderClient({ baseUrl: "https://your-worker.workers.dev" });
+const hh = new HorseHolderClient({ baseUrl: "https://your-worker.workers.dev" });
 ```
 
 Free tier holds a lot of horses.
@@ -258,13 +256,13 @@ Free tier holds a lot of horses.
 
 A full description of how to conform to the Horse Holder protocol can be found in [spec/spec.md](spec/spec.md), and an OpenAPI schema found in [spec/openapi.yaml](spec/openapi.yaml).
 
-| Endpoint | Does |
-| --- | --- |
-| `POST /v1/charge` | Spend now, atomically, across up to 16 budgets |
-| `POST /v1/reserve` | Hold capacity when the cost is not known yet |
-| `POST /v1/commit` | Settle a hold, correcting the amount if you like |
-| `POST /v1/release` | Give a hold back unspent |
-| `GET /v1/budget` | Read the whole group at one instant |
+| Endpoint           | Does                                             |
+| ------------------ | ------------------------------------------------ |
+| `POST /v1/charge`  | Spend now, atomically, across up to 16 budgets   |
+| `POST /v1/reserve` | Hold capacity when the cost is not known yet     |
+| `POST /v1/commit`  | Settle a hold, correcting the amount if you like |
+| `POST /v1/release` | Give a hold back unspent                         |
+| `GET /v1/budget`   | Read the whole group at one instant              |
 
 The bar for conforming is [tests/spec/](tests/spec/), which is implementation-agnostic on purpose. Point it at your server. If it passes, you conform.
 

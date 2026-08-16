@@ -4,10 +4,84 @@
   "main": "worker.ts",
   "compatibility_date": "2025-04-01",
   "compatibility_flags": ["nodejs_compat"],
-  "assets": { "directory": "./dist", "binding": "ASSETS" },
-  "durable_objects": {
-    "bindings": [{ "name": "BUDGETS", "class_name": "BudgetGroup" }],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BudgetGroup"] }],
-  "kv_namespaces": [{ "binding": "API_KEYS", "id": "api_keys_placeholder" }],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "BUDGETS",
+        "class_name": "BudgetGroup",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["BudgetGroup"],
+    },
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "API_KEYS",
+      "id": "api_keys_placeholder",
+    },
+  ],
+  "env": {
+    "staging": {
+      "name": "horse-holder-staging",
+      "assets": {
+        "directory": "./dist",
+        "binding": "ASSETS",
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "BUDGETS",
+            "class_name": "BudgetGroup",
+          },
+        ],
+      },
+      "migrations": [
+        {
+          "tag": "v1",
+          "new_sqlite_classes": ["BudgetGroup"],
+        },
+      ],
+      "kv_namespaces": [
+        {
+          "binding": "API_KEYS",
+          "id": "c7fd5e905d0949e68e0a5cc503598c20",
+        },
+      ],
+    },
+    "production": {
+      "name": "horse-holder-production",
+      "assets": {
+        "directory": "./dist",
+        "binding": "ASSETS",
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "BUDGETS",
+            "class_name": "BudgetGroup",
+          },
+        ],
+      },
+      "migrations": [
+        {
+          "tag": "v1",
+          "new_sqlite_classes": ["BudgetGroup"],
+        },
+      ],
+      "kv_namespaces": [
+        {
+          "binding": "API_KEYS",
+          "id": "64dd2515d0184c93a4d798be4d0799e6",
+        },
+      ],
+    },
+  },
 }
