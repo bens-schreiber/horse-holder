@@ -4,17 +4,28 @@ interface Props {
   used: number;
   limit: number;
   display: string;
+  /** Colors the meter red, and replaces the readout with EXCEEDED unless `keepDisplay`. */
   exceeded?: boolean;
+  /** Keeps the numbers visible on an exceeded meter, for a budget that is tight but not spent. */
+  keepDisplay?: boolean;
 }
 
-const { name, used, limit, display, exceeded = false } = Astro.props;
+const {
+  name,
+  used,
+  limit,
+  display,
+  exceeded = false,
+  keepDisplay = false,
+} = Astro.props;
+const value = exceeded && !keepDisplay ? "EXCEEDED" : display;
 const percent = Math.min(100, Math.round((used / limit) * 100));
 ---
 
 <div class:list={["meter", { "meter-exceeded": exceeded }]}>
   <div class="meter-head">
     <span class="meter-name">{name}</span>
-    <span class="meter-value">{exceeded ? "EXCEEDED" : display}</span>
+    <span class="meter-value">{value}</span>
   </div>
   <div
     class="meter-track"
@@ -23,7 +34,7 @@ const percent = Math.min(100, Math.round((used / limit) * 100));
     aria-valuenow={used}
     aria-valuemin="0"
     aria-valuemax={limit}
-    aria-valuetext={`${display}${exceeded ? ", exceeded" : ""}`}
+    aria-valuetext={`${display}${exceeded && !keepDisplay ? ", exceeded" : ""}`}
   >
     <div class="meter-fill" style={`--fill: ${percent}%`}></div>
   </div>

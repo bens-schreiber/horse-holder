@@ -2,17 +2,13 @@
 import { Code } from "astro:components";
 import Meter from "./Meter.astro";
 
-const example = `// A Cloud SMS provider
+const example = `// 50,000 text messages a month, and not one more.
 const sms = hh.group("sms")
-  .budget("messages", { limit: 50_000, renewal: renewal.monthly() })
-  .budget("segments", { limit: 100_000, renewal: renewal.monthly() });
+  .budget("messages", { limit: 50_000, renewal: renewal.monthly() });
 
-// A 3-segment blast to 12,000 phones against
-// a segment budget with 880 left.
+// Sending to 200 people. Can we afford it?
 const result = await sms
-  .draw("messages", 12_000)
-  .draw("segments", 36_000)
-  .idempotent("blast-51ac")
+  .draw("messages", 200)
   .charge();`;
 ---
 
@@ -30,21 +26,16 @@ const result = await sms
 
     <Meter
       name="messages"
-      used={18204}
+      used={49880}
       limit={50000}
-      display="18,204 / 50,000"
-    />
-    <Meter
-      name="segments"
-      used={99120}
-      limit={100000}
-      display="99,120 / 100,000"
+      display="49,880 / 50,000"
       exceeded
+      keepDisplay
     />
 
     <p class="verdict">
-      <strong>Nothing was spent.</strong> Not on the budget that ran out, and not
-      on the one that had room. Retry in 12d.
+      <strong>Only 120 left, so the answer is no.</strong> Nothing was spent, and
+      the budget is untouched. Retry in 12d.
     </p>
   </div>
 </div>
