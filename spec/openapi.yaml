@@ -14,7 +14,7 @@ info:
     A group is the atomicity domain: budgets in one group are drawn together or not at all, and
     a draw cannot span groups because there is no way to express one.
 
-    See the normative specification for the reasoning behind all of it.
+    See the normative specification for the reasoning behind these rules.
   license:
     name: MIT
     identifier: MIT
@@ -301,6 +301,10 @@ components:
         An absent header and an empty-valued header identify **different** budgets: absent means
         the scope's default tenant, empty is an ordinary tenant named `""`. Implementations must
         check presence rather than testing the value for emptiness.
+
+        This distinction cannot be expressed in the schema below, which validates both cases
+        identically. Generated clients must preserve it themselves: send no header at all for
+        the default tenant, rather than sending an empty one.
       schema:
         type: string
         pattern: "^([A-Za-z0-9_.-]{1,128})?$"
@@ -314,8 +318,8 @@ components:
         Deduplicates retries. The identity is `(scope, tenant, group, endpoint, key)`.
 
         Generate one key per logical operation and reuse it across attempts. Only the budget ids
-        and amounts are compared; `definition` is excluded, so deploying a limit change mid
-        flight does not turn a retry into a conflict. Failed (`402`) draws record nothing.
+        and amounts are compared; `definition` is excluded, so deploying a limit change
+        mid-flight does not turn a retry into a conflict. Failed (`402`) draws record nothing.
       schema:
         type: string
         minLength: 1
@@ -362,9 +366,8 @@ components:
       type: string
       pattern: "^[A-Za-z0-9_.-]{1,128}$"
       description: |
-        Budget ids and groups. The charset keeps composite key derivation injective: with
-        arbitrary characters, tenant `a::b` + budget `c` could collide with tenant `a` + budget
-        `b::c`, which is cross-tenant access obtained by naming alone.
+        Budget ids and groups. The charset keeps composite key derivation injective; see §1.1
+        of the normative specification.
 
     Amount:
       type: number
@@ -373,6 +376,9 @@ components:
         Finite and non-negative, with at least 53-bit integer precision supported. Prefer
         integers in the smallest meaningful unit (bytes, op counts, hundredths of a cent) over
         floats, so rounding does not accumulate across many small draws.
+
+        On a draw, `0` consumes nothing and crosses no threshold, but still reconciles the
+        definition.
 
     Timestamp:
       type: string
@@ -456,10 +462,7 @@ components:
       description: |
         A budget's configuration, sent inline with every draw. Reconciled before the draw is
         evaluated, and reconciliation never resets usage: lowering a limit below current usage
-        is legal and simply exhausts the budget.
-
-        An unrecognized field is rejected with `400`, so a misspelled `limitt` cannot leave a
-        caller believing a limit is enforced when it is not.
+        is legal and simply exhausts the budget. An unrecognized field is rejected with `400`.
       required: [limit, renewal]
       additionalProperties: false
       properties:
@@ -467,8 +470,7 @@ components:
           type: number
           exclusiveMinimum: 0
           description: |
-            Positive. Zero is rejected because thresholds are `used / limit`, and the result of
-            dividing by zero varies by language. To block everything, use a limit of 1.
+            Positive; zero is rejected. To block everything, use a limit of 1.
         renewal:
           $ref: "#/components/schemas/Renewal"
         warnings:
@@ -508,7 +510,7 @@ components:
             $ref: "#/components/schemas/DrawBudget"
           description: |
             Ids must be unique within the request. A duplicate is rejected with `400` rather
-            than silently summed, since it almost always means a caller-side bug.
+            than silently summed.
 
     CommitBudget:
       type: object
@@ -532,13 +534,14 @@ components:
           items:
             $ref: "#/components/schemas/CommitBudget"
           description: |
-            Corrections only. Introducing a budget id absent from the original reservation is a
-            draw with no capacity check behind it, and is rejected with `400`.
+            Corrections only. Introducing a budget id absent from the original reservation is
+            rejected with `400`.
 
     BudgetOutcome:
       type: object
       description: One budget's state after a draw, commit, or release.
       required: [id, requested, exceeded, limit, used, remaining, renewsAt, warningsCrossed]
+      additionalProperties: false
       properties:
         id:
           $ref: "#/components/schemas/Identifier"
@@ -550,8 +553,7 @@ components:
             never named, and for every entry on a release.
         exceeded:
           type: boolean
-          description: |
-            True for **every** budget that lacked capacity, not just the first one found.
+          description: True for **every** budget that lacked capacity, not just the first found.
         limit:
           type: number
           exclusiveMinimum: 0
@@ -602,8 +604,7 @@ components:
       type: array
       description: |
         **Every** budget in the group, not only the ones the request named, ordered
-        lexicographically by id. Same shape and same ordering on `402` as on `200`, so one
-        decoder handles both and a caller branches on the status alone.
+        lexicographically by id. Same shape and same ordering on `402` as on `200`.
       items:
         $ref: "#/components/schemas/BudgetOutcome"
 
@@ -786,9 +787,8 @@ components:
 
     ReservationNotFound:
       description: |
-        Unknown or expired reservation. An expired hold is `404` rather than `410`: its capacity
-        is already back, and the caller's correct move is to treat the operation as unbudgeted
-        and start over.
+        Unknown or expired reservation. An expired hold's capacity is already back, so the
+        caller's correct move is to treat the operation as unbudgeted and start over.
       content:
         application/json:
           schema:

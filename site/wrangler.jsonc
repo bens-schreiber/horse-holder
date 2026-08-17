@@ -58,6 +58,7 @@
     },
     "production": {
       "name": "horse-holder-production",
+      "workers_dev": true,
       "routes": [
         { "pattern": "horseholder.com", "custom_domain": true },
         { "pattern": "www.horseholder.com", "custom_domain": true },

@@ -4,7 +4,7 @@ A vendor-neutral HTTP protocol for **pre-flight budget enforcement**: setting sp
 limits and drawing against them _before_ a metered operation happens.
 
 This document specifies the wire protocol. It does not specify storage, deployment, or how
-credentials are issued and verified; of authentication it fixes only where a credential
+credentials are issued and verified; for authentication, it fixes only where a credential
 travels on the wire (§9). Any server implementing the endpoints and semantics below is a
 conforming Horse Holder implementation.
 
@@ -58,9 +58,8 @@ This restriction exists to make composite key derivation safe. Implementations t
 build a storage key by joining the four components with a delimiter. If identifiers may
 contain arbitrary characters, a caller can forge collisions across that delimiter: with a
 `::` separator, tenant `a::b` + budget `c` derives the same key as tenant `a` + budget
-`b::c`. That is cross-tenant budget access obtained by naming alone — exactly the
-isolation failure this section warns about, reintroduced through the mechanism meant to
-prevent it.
+`b::c`. That is cross-tenant budget access obtained by naming alone — the isolation
+failure §1 warns about, reintroduced through the mechanism meant to prevent it.
 
 Implementations MUST reject non-conforming identifiers with `400`. Implementations using a
 derivation that is injective regardless of content (length-prefixed encoding, or hashing
@@ -81,30 +80,22 @@ A group is the unit of atomicity. Because the group travels in a single request 
 draw cannot span groups — there is no way to express one. All-or-nothing (§8) therefore
 holds unconditionally for every draw the protocol can represent.
 
-This lets implementations map a group directly onto whatever their storage layer makes
-transactional: one row group, one actor, one document, one object. Atomicity becomes a
-structural property of where data lives rather than something request handling must
-maintain.
-
 **Choosing groups.** Budgets drawn together MUST share a group. In the common case a
 single R2 write draws from an operation-count budget and a byte-count budget at once, so
 those two belong together. Budgets never drawn in the same request — an email quota and a
 storage quota, say — can be separated, which lets their draws proceed in parallel and
 independently.
 
-**Groups are mandatory.** `hh-group` MUST be present on every request addressing a
-budget. A request omitting it MUST be rejected with `400`. There is no default.
+**Groups are mandatory.** `hh-group` MUST be present on every request. A request omitting
+it MUST be rejected with `400`. There is no default.
 
-This is deliberate, and the alternative was considered and rejected. A default group
-would pool every budget in a scope-tenant pair into one atomicity domain, so unrelated
-subsystems — an email quota and a storage quota with nothing to do with one another —
-would serialize against each other through a single transactional unit. Callers would
-inherit that contention without ever choosing it, and would experience it as unrelated
-operations mysteriously blocking one another under load. Requiring the header moves the
-decision to the call site, where the caller knows which budgets actually belong together.
-
-The cost is one required header on every call, which is trivial for any SDK to supply
-from a budget descriptor defined once.
+A default group would pool every budget in a scope-tenant pair into one atomicity domain,
+so unrelated subsystems — an email quota and a storage quota with nothing to do with one
+another — would serialize against each other through a single transactional unit. Callers
+would inherit that contention without ever choosing it, and would experience it as
+unrelated operations mysteriously blocking one another under load. Requiring the header
+moves the decision to the call site, where the caller knows which budgets actually belong
+together.
 
 **Groups are part of identity, not configuration.** Because the group is a component of
 the budget key, drawing against budget `x` under group `a` and under group `b` addresses
@@ -112,7 +103,7 @@ the budget key, drawing against budget `x` under group `a` and under group `b` a
 which reconcile onto an existing budget (§3.1).
 
 The practical consequence is that a group is effectively immutable: changing the group a
-budget is drawn under does not move it, it silently starts a fresh budget at zero usage.
+budget is drawn under does not move it; it silently starts a fresh budget at zero usage.
 Callers MUST treat a budget's group as fixed once chosen. Implementations MAY maintain a
 scope-level index of budget IDs to their groups and reject a mismatch with `409`
 `budget_group_conflict`; this is OPTIONAL because such an index must be consulted on every
@@ -124,8 +115,7 @@ draw, which reintroduces exactly the shared bottleneck groups exist to remove.
 
 - All endpoints are rooted at an implementation-defined base URL plus `/v1`.
 - Request and response bodies are `application/json; charset=utf-8`.
-- Header names are lowercase and hyphenated. HTTP header names are case-insensitive;
-  lowercase is the canonical form in HTTP/2 and later.
+- Header names are lowercase and hyphenated.
 - Timestamps are RFC 3339 / ISO 8601 in UTC, e.g. `2026-08-15T00:00:00Z`.
 - Amounts are JSON numbers. They MUST be finite and MUST NOT be negative. Implementations
   MUST support at least 53-bit integer precision. Callers SHOULD use integers in the
@@ -148,13 +138,12 @@ draw, which reintroduces exactly the shared bottleneck groups exist to remove.
 ### Route shape
 
 Every endpoint is a **static path**. No path parameters, no templating: all resource
-identity travels in headers. A conforming implementation can route with exact string
-comparison and needs no router library, regex, or path-matching framework. Request bodies
-carry amounts; headers carry identity and control.
+identity travels in headers. Request bodies carry amounts; headers carry identity and
+control.
 
-A consequence worth exploiting: `hh-tenant` and `hh-group` fully determine which storage
-unit a request touches, so an implementation can route to that unit from headers alone,
-before reading or parsing the body.
+`hh-tenant` and `hh-group` fully determine which storage unit a request touches, so an
+implementation can route to that unit from headers alone, before reading or parsing the
+body.
 
 ---
 
@@ -168,6 +157,14 @@ This makes budgets fully declarative: the caller's code is the source of truth f
 configuration, and the server reconciles toward it. A caller can deploy a new limit by
 changing a constant in their source, with no migration step and no separate admin call.
 
+`limit` MUST be a positive number. Zero is rejected with `400`, since warning thresholds
+are computed as `used / limit`. Callers wanting to block all activity SHOULD use a limit
+of `1` with every draw costing at least `1`, or stop calling the guarded operation.
+
+A draw MAY carry an `amount` of `0`. Such an entry consumes nothing and crosses no
+threshold, but its definition still reconciles (§3.1), which lets a caller create or
+update a budget without spending from it.
+
 ### 3.1 Reconciliation
 
 On every draw, the server compares the submitted definition to the stored one and
@@ -175,12 +172,11 @@ applies the following rules. Reconciliation happens **before** the draw is evalu
 
 **Changing `limit`** — Takes effect immediately. **Usage MUST NOT be reset.**
 
-This is the most important rule in this section. Resetting usage on a limit change would
-make the limit trivially bypassable: any caller (or any bug, or any attacker with the
-ability to send a draw) could restore full capacity by nudging the limit. Instead, the
-new limit is compared against existing usage, which means **lowering a limit below
-current usage is legal**. The budget is simply exhausted: `remaining` is reported as `0`,
-and draws fail until the next renewal.
+Resetting usage on a limit change would make the limit trivially bypassable: any caller
+(or any bug, or any attacker with the ability to send a draw) could restore full capacity
+by nudging the limit. Instead, the new limit is compared against existing usage, which
+means **lowering a limit below current usage is legal**. The budget is simply exhausted:
+`remaining` is reported as `0`, and draws fail until the next renewal.
 
 A limit change MUST reset the warning high-water mark to zero (§6). Thresholds are
 fractions of the limit, so changing the limit changes what they mean; carrying the old
@@ -241,13 +237,12 @@ Fixed-duration windows of exactly `seconds` length, tiled forward from `anchor`.
 `seconds` MUST be a positive integer. `anchor` is OPTIONAL and defaults to the instant
 the budget was first created.
 
-Windows are **tumbling, not sliding**: at each boundary, usage resets to zero. This is
-deliberate. A true sliding window requires retaining every individual draw's timestamp
-and amount so expiring draws can be subtracted one by one — unbounded storage per budget
-and a far heavier implementation burden, which conflicts with this protocol's goal of
-being reimplementable in an afternoon. Callers who need smoothing SHOULD compose several
-budgets at different durations (e.g. a per-minute budget and a per-day budget drawn
-together atomically), which approximates sliding behavior with constant storage.
+Windows are **tumbling, not sliding**: at each boundary, usage resets to zero. A true
+sliding window requires retaining every individual draw's timestamp and amount so
+expiring draws can be subtracted one by one — unbounded storage per budget and a far
+heavier implementation burden. Callers who need smoothing SHOULD compose several budgets
+at different durations (e.g. a per-minute budget and a per-day budget drawn together
+atomically), which approximates sliding behavior with constant storage.
 
 Duration is expressed only in seconds, because "rolling month" is ambiguous — 28 to 31
 days depending on the month, which produces silently inconsistent enforcement. Callers
@@ -275,9 +270,7 @@ Boundaries aligned to civil calendar units.
   Monday, January 1st).
 
 Timezone is a required part of this model because a "daily" budget is meaningless without
-knowing whose midnight is meant. A server in UTC enforcing a US-Central customer's daily
-budget will reset six hours off from the customer's expectation, which surfaces as
-mysterious late-evening exhaustion.
+knowing whose midnight is meant.
 
 **Month-end clamping.** When an anchor's day-of-month exceeds the length of a target
 month, the boundary MUST clamp to the last day of that month. An anchor on the 31st
@@ -348,12 +341,6 @@ Immediately and atomically consume capacity from one or more budgets.
 `budgets` MUST contain at least one entry and at most **16**. Each entry's `id` MUST be
 unique within the request; duplicate IDs MUST be rejected with `400` rather than silently
 summed, since a duplicate almost always indicates a caller-side bug.
-
-`limit` MUST be a positive number. Zero is rejected with `400`: warning thresholds are
-computed as `used / limit`, so a zero limit yields a division by zero whose result differs
-by language, producing behavior that varies between conforming implementations. Callers
-wanting to block all activity SHOULD use a limit of `1` with every draw costing at least
-`1`, or stop calling the guarded operation.
 
 **Response `200 OK`**
 
@@ -430,34 +417,23 @@ empty `warningsCrossed`.
 The server holds the entire group in one transactional unit already (§8.1), so reporting all
 of it costs nothing and means every response is a complete, consistent picture of the
 atomicity domain at one instant. A caller never has to follow a draw with a read to find out
-where the rest of its budgets stand, and a client library can offer a total lookup over the
-group rather than one that may or may not have an answer.
+where the rest of its budgets stand.
 
 Because the array describes the group rather than the request, it is ordered by the group's
 own key: entries MUST appear in lexicographic `id` order, drawn and undrawn alike. Every
 response in this protocol therefore carries the same entries in the same order, whatever the
 endpoint and whatever the status, and two reads with no draw between them are byte-identical.
-Ordering drawn entries first would instead make the array's shape depend on which budgets a
-caller happened to name, which is the request-shaped framing this section replaces.
 
 A caller locates its own entries by `id`, or by filtering on `requested > 0` for the ones
 this request drew from. It identifies what blocked by filtering on `exceeded`; the array
-MUST have **the same shape and the same ordering on `402` as on `200`**.
+MUST have **the same shape and the same ordering on `402` as on `200`**. Client code
+therefore reads `budgets` identically regardless of status and branches only on the status
+code itself, and a caller diagnosing a blocked multi-budget draw can see how close the
+_other_ budgets were, not merely which one hit its wall.
 
 The `message` on a `402` counts only the budgets the request named — a draw against 1 budget
 inside a group of 5 reports `1 of 1`, never `1 of 5`. Budgets the request never touched did
 not participate in the failure and MUST NOT inflate the denominator.
-
-Two properties follow from this, both deliberate:
-
-- **One parser.** Client code reads `budgets` identically regardless of status, and
-  branches only on the status code itself. A response shape that changes between success
-  and failure forces every implementer to write and maintain two decoders for what is
-  conceptually one result.
-- **Full visibility on failure.** A caller diagnosing a blocked multi-budget draw can see
-  how close the _other_ budgets were, not merely which one hit its wall. Reporting only
-  failures discards exactly the context needed to decide whether to retry smaller, shed
-  load, or raise a limit.
 
 `exceeded` MUST be `true` for **every** budget that lacked capacity, not merely the first
 one encountered. Reporting one failure at a time forces a retry loop that rediscovers the
@@ -609,9 +585,9 @@ empty group is simply one nothing has been spent from. There is no `404` on this
 
 ## 6. Warnings
 
-`warnings` is an array of fractions where `0 < w < 1`. Values MUST be strictly between
-zero and one; `1.0` is not a warning threshold, it is the limit itself, and accepting it
-would produce a "warning" indistinguishable from exhaustion.
+`warnings` is an array of at most **32** fractions where `0 < w < 1`. Values MUST be
+strictly between zero and one; `1.0` is not a warning threshold, it is the limit itself,
+and accepting it would produce a "warning" indistinguishable from exhaustion.
 
 A budget MUST track a **high-water mark**: the greatest usage fraction observed in the
 current period. On a successful draw or commit, the server computes the new fraction
@@ -753,8 +729,7 @@ Since groups are mandatory and part of budget identity, this choice is made once
 the point a budget is first drawn, and is not cheaply revisited (§1.2).
 
 Implementations SHOULD NOT attempt distributed transactions across groups. Nothing in the
-protocol requires one, and building the capability invites a future feature that quietly
-depends on it.
+protocol requires one.
 
 ---
 
