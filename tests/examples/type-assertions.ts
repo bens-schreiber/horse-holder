@@ -7,7 +7,7 @@
  * executed, which is why the calls are never awaited.
  */
 
-import { HorseHolderClient, renewal } from "@horse-holder/client";
+import { DEFAULT_BASE_URL, HorseHolderClient, renewal } from "@horse-holder/client";
 
 const hh = new HorseHolderClient({ baseUrl: "https://example.invalid", apiKey: "unused" });
 
@@ -82,6 +82,12 @@ export function typeAssertions(): void {
   // A budget whose limit is not a number is not a budget.
   // @ts-expect-error limit must be a number
   void hh.group("bad").budget("a", { limit: "lots", renewal: renewal.never() });
+
+  // `baseUrl` defaults to the hosted server, so both the option and the whole options object
+  // are optional. None of these construct a request, so no server is ever reached.
+  void new HorseHolderClient();
+  void new HorseHolderClient({ apiKey: "unused" });
+  void new HorseHolderClient({ baseUrl: DEFAULT_BASE_URL });
 
   // These two are legal, and are here to prove the assertions above fail for the right reason.
   void r2.draw("put-ops", 1).draw("storage-bytes", 2).idempotent("k").charge();

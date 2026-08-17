@@ -34,11 +34,10 @@ const snippet = (
 ) => `import { HorseHolderClient } from "@horse-holder/client";
 
 const hh = new HorseHolderClient({
-  baseUrl: "https://horseholder.dev",
   apiKey: "${apiKey}",
 });`;
 
-const curl = (apiKey: string) => `curl https://horseholder.dev/v1/whoami \\
+const curl = (apiKey: string) => `curl https://horseholder.com/v1/whoami \\
   -H "authorization: Bearer ${apiKey}"`;
 ---
 

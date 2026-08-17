@@ -1,7 +1,18 @@
 {
   "name": "@horse-holder/client",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "TypeScript client for the Horse Holder v1 protocol",
+  "keywords": [
+    "budget",
+    "horse-holder",
+    "quota",
+    "rate-limit",
+    "spend"
+  ],
+  "homepage": "https://horseholder.com",
+  "bugs": {
+    "url": "https://github.com/bens-schreiber/horse-holder/issues"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",

@@ -18,10 +18,10 @@ info:
   license:
     name: MIT
     identifier: MIT
-  x-normative-spec: https://github.com/bschreib/horse-holder/blob/main/spec/spec.md
+  x-normative-spec: https://github.com/bens-schreiber/horse-holder/blob/main/spec/spec.md
 
 servers:
-  - url: https://horseholder.dev/v1
+  - url: https://horseholder.com/v1
     description: The hosted instance.
   - url: http://localhost:8787/v1
     description: A local `make dev`.
@@ -29,7 +29,7 @@ servers:
     description: Any conforming implementation.
     variables:
       baseUrl:
-        default: https://horseholder.dev
+        default: https://horseholder.com
 
 security:
   - bearerAuth: []

@@ -37,8 +37,11 @@ export type HeaderSource =
   | Readonly<Record<string, string>>
   | (() => Readonly<Record<string, string>> | Promise<Readonly<Record<string, string>>>);
 
+/** The hosted server, used when no `baseUrl` is given. */
+export const DEFAULT_BASE_URL = "https://horseholder.com";
+
 export interface TransportOptions {
-  readonly baseUrl: string;
+  readonly baseUrl?: string | undefined;
   readonly apiKey?: string | undefined;
   readonly headers?: HeaderSource | undefined;
   readonly fetch?: FetchLike | undefined;
@@ -78,7 +81,7 @@ export class Transport {
 
     // Paths are appended as text rather than resolved as URLs, since
     // `new URL("/v1/charge", "https://host/api")` would quietly throw away the `/api` part.
-    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
+    this.baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
 
     // Only the global needs rebinding. Binding a caller's own `fetch` would detach it from
     // whatever object it came off.

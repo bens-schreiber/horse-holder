@@ -4,7 +4,7 @@
 
 # Hold your horses.
 
-[Website](https://horseholder.dev) · [Spec](spec/spec.md) · [OpenAPI](spec/openapi.yaml) · [Client](client/ts) · [MIT](LICENSE)
+[Website](https://horseholder.com) · [npm](https://www.npmjs.com/package/@horse-holder/client) · [Spec](spec/spec.md) · [OpenAPI](spec/openapi.yaml) · [Client](client/ts) · [MIT](LICENSE)
 </div>
 
 ```bash
@@ -21,7 +21,6 @@ npm install @horse-holder/client
 import { HorseHolderClient, renewal } from "@horse-holder/client";
 
 const hh = new HorseHolderClient({
-  baseUrl: "https://horseholder.dev",
   apiKey: process.env.HORSEHOLDER_API_KEY,
 });
 
