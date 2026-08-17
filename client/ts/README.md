@@ -22,26 +22,24 @@ const hh = new HorseHolderClient({
   apiKey: process.env.HORSEHOLDER_API_KEY,
 });
 
-const r2 = hh.group({
-  id: "r2",
-  budgets: {
-    "put-ops": { limit: 1_000, warnings: [0.5, 0.8], renewal: renewal.daily() },
-    "storage-bytes": { limit: 1_000_000, renewal: renewal.monthly() },
-  },
-});
+const r2 = hh
+  .group("r2")
+  .budget("put-ops", { limit: 1_000, warnings: [0.5, 0.8], renewal: renewal.daily() })
+  .budget("storage-bytes", { limit: 1_000_000, renewal: renewal.monthly() });
 ```
 
-`group()` does no I/O. Limits ride along with every draw, so this is just the one place they live, which is what stops two call sites from disagreeing. It captures the budget ids as literal types, so everything below is checked against them.
+`group()` does no I/O, and neither does `budget()`. Limits ride along with every draw, so this is just the one place they live, which is what stops two call sites from disagreeing. Each declared name joins the group's type, so everything below is checked against them.
 
-It is also pure, so per-plan limits are ordinary code. Build a group from a customer record at request time.
+Every step returns a new group rather than changing the old one, so per-plan limits are ordinary code. Build a group from a customer record at request time.
 
 ## Cost known up front
 
 ```ts
-const result = await r2.charge(
-  { "put-ops": 1, "storage-bytes": 1_000 },
-  { idempotencyKey: `upload-${uploadId}` },
-);
+const result = await r2
+  .draw("put-ops", 1)
+  .draw("storage-bytes", 1_000)
+  .idempotent(`upload-${uploadId}`)
+  .charge();
 
 if (!result.ok) {
   result.exceeded; // the budgets that ran out
@@ -60,13 +58,15 @@ Running out is a value, not an exception. Being told no is the client working co
 
 Every response covers the whole group, not just the budgets you drew from, so `get()` always has an answer.
 
+Nothing is sent until the chain ends in `charge()` or `reserve()`, and neither of those exists until `idempotent()` has named the operation. A draw that could double-spend on retry is not something this client lets you write.
+
 ## Cost known later
 
 ```ts
-const lease = await r2.reserve(
-  { "storage-bytes": estimate },
-  { idempotencyKey: `upload-${uploadId}`, ttlSeconds: 60 },
-);
+const lease = await r2
+  .draw("storage-bytes", estimate)
+  .idempotent(`upload-${uploadId}`)
+  .reserve({ ttlSeconds: 60 });
 
 if (!lease.ok) return;
 
@@ -89,7 +89,7 @@ The lease remembers what it held, in the type:
 await lease.commit({ "put-ops": 2 }); // compile error, that was never reserved
 ```
 
-Settling somewhere else entirely? `r2.commit(reservationId, corrections?)` and `r2.release(reservationId)` do the same job without the lease.
+Settling somewhere else entirely? `r2.reservation(reservationId)` gives you `commit(corrections?)` and `release()` from nothing but the id.
 
 ## Reading
 
@@ -105,15 +105,23 @@ Every number describes the same moment. Budgets you declared but never drew from
 
 ## Tenants
 
-`r2.tenant("acme")` points the same group at somebody else. Same declaration, same connection, separate money. A per-call `tenant` beats it.
+`r2.tenant("acme")` points the same group at somebody else. Same declaration, same connection, separate money.
+
+A single draw can go somewhere else without a second group, which is what you want when the customer changes per request:
+
+```ts
+await ci.draw("build-minutes", 12).tenant(customer.id).idempotent(buildId).charge();
+```
+
+Innermost wins: a per-call `tenant` in the options beats the draw, the draw beats the group, and the group beats the client.
 
 Absent and empty are different tenants, and HTTP libraries love to quietly collapse the two, so the type keeps them apart:
 
-| You write      | Sends                     | Which means                   |
-| -------------- | ------------------------- | ----------------------------- |
-| nothing        | no `hh-tenant` header     | inherit the client or group   |
-| `tenant: null` | no `hh-tenant` header     | the scope's default tenant    |
-| `tenant: ""`   | `hh-tenant:` with nothing | an ordinary tenant named `""` |
+| You write      | Sends                     | Which means                     |
+| -------------- | ------------------------- | ------------------------------- |
+| nothing        | no `hh-tenant` header     | inherit whatever was set before |
+| `tenant: null` | no `hh-tenant` header     | the scope's default tenant      |
+| `tenant: ""`   | `hh-tenant:` with nothing | an ordinary tenant named `""`   |
 
 ## Errors and retries
 
@@ -153,7 +161,7 @@ new HorseHolderClient({
 });
 ```
 
-Every method also takes `tenant`, `signal`, `headers`, and `timeoutMs`.
+Every call that reaches the server also takes `tenant`, `signal`, `headers`, and `timeoutMs`: `charge(options?)`, `reserve(options?)` (plus `ttlSeconds`), `commit`, `release`, and `read`.
 
 More in [examples/ts](https://github.com/bens-schreiber/horse-holder/tree/main/examples/ts): seven runnable files, seven different services, each one asserts its own outcome.
 

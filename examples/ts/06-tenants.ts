@@ -10,40 +10,40 @@ import { HorseHolderClient, renewal } from "@horse-holder/client";
 
 export const name = "tenants are independent";
 
-const hhldr = new HorseHolderClient({
+const hh = new HorseHolderClient({
   baseUrl: process.env["HH_BASE_URL"]!,
   apiKey: process.env["HORSEHOLDER_API_KEY"]!,
 });
 
 // A Vercel-style CI budget.
-const ci = hhldr.group({
-  id: "ci-builds",
-  budgets: {
-    // The amount of build time used, limited to 500 minutes per month.
-    "build-minutes": {
-      limit: 500,
-      renewal: renewal.monthly({ timezone: "UTC" }),
-    },
-    // The amount of build output stored, limited to 20,000 megabytes per month.
-    "artifact-megabytes": {
-      limit: 20_000,
-      renewal: renewal.monthly({ timezone: "UTC" }),
-    },
-  },
-});
+const ci = hh
+  .group("ci-builds")
+  // The amount of build time used, limited to 500 minutes per month.
+  .budget("build-minutes", {
+    limit: 500,
+    renewal: renewal.monthly({ timezone: "UTC" }),
+  })
+  // The amount of build output stored, limited to 20,000 megabytes per month.
+  .budget("artifact-megabytes", {
+    limit: 20_000,
+    renewal: renewal.monthly({ timezone: "UTC" }),
+  });
 
 export async function run(): Promise<void> {
-  // The same group, pointed at two of your customers. They share one connection
-  // and one declaration, and nothing else.
+  // The same group, pointed at one of your customers. Groups are immutable, so
+  // this shares one connection and one declaration with `ci` and nothing else.
   const acme = ci.tenant("acme");
-  const globex = ci.tenant("globex");
 
   const [acmeBuild, globexBuild] = await Promise.all([
-    acme.charge(
-      { "build-minutes": 12, "artifact-megabytes": 340 },
-      { idempotencyKey: "build-acme-1187" },
-    ),
-    globex.charge({ "build-minutes": 3 }, { idempotencyKey: "build-globex-2043" }),
+    acme
+      .draw("build-minutes", 12)
+      .draw("artifact-megabytes", 340)
+      .idempotent("build-acme-1187")
+      .charge(),
+
+    // A single draw can be pointed somewhere else instead, which is what you
+    // want when the customer changes per request rather than per module.
+    ci.draw("build-minutes", 3).tenant("globex").idempotent("build-globex-2043").charge(),
   ]);
 
   if (!acmeBuild.ok || !globexBuild.ok) {

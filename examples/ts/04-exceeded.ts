@@ -10,36 +10,34 @@ import { HorseHolderClient, renewal } from "@horse-holder/client";
 
 export const name = "over-draw returns ok: false";
 
-const hhldr = new HorseHolderClient({
+const hh = new HorseHolderClient({
   baseUrl: process.env["HH_BASE_URL"]!,
   apiKey: process.env["HORSEHOLDER_API_KEY"]!,
 });
 
 // A Bedrock-style inference budget.
-const inference = hhldr.group({
-  id: "llm-inference",
-  budgets: {
-    // The amount of model calls made, limited to 5,000 per month.
-    requests: {
-      limit: 5_000,
-      renewal: renewal.monthly({ timezone: "America/New_York" }),
-    },
-    // The amount of input tokens spent, limited to 1,000,000 per month.
-    "input-tokens": {
-      limit: 1_000_000,
-      renewal: renewal.monthly({ timezone: "America/New_York" }),
-    },
-  },
-});
+const inference = hh
+  .group("llm-inference")
+  // The amount of model calls made, limited to 5,000 per month.
+  .budget("requests", {
+    limit: 5_000,
+    renewal: renewal.monthly({ timezone: "America/New_York" }),
+  })
+  // The amount of input tokens spent, limited to 1,000,000 per month.
+  .budget("input-tokens", {
+    limit: 1_000_000,
+    renewal: renewal.monthly({ timezone: "America/New_York" }),
+  });
 
 export async function run(): Promise<void> {
   // Five million tokens against a one million token budget. There is plenty of
   // room left in requests, but one budget falling short refuses the whole draw,
   // so nothing at all is spent.
-  const refused = await inference.charge(
-    { requests: 1, "input-tokens": 5_000_000 },
-    { idempotencyKey: "chat-turn-51ac" },
-  );
+  const refused = await inference
+    .draw("requests", 1)
+    .draw("input-tokens", 5_000_000)
+    .idempotent("chat-turn-51ac")
+    .charge();
 
   if (refused.ok) {
     throw new Error("we want this to be refused! hold my horses!");
@@ -49,10 +47,11 @@ export async function run(): Promise<void> {
   // and roughly how long until waiting would help. Enough to decide
   // between trimming the prompt, waiting, or upselling the customer.
   const wait = refused.retryAfter;
-  const trimmed = await inference.charge(
-    { requests: 1, "input-tokens": 4_000 },
-    { idempotencyKey: "chat-turn-51ac-shortened" },
-  );
+  const trimmed = await inference
+    .draw("requests", 1)
+    .draw("input-tokens", 4_000)
+    .idempotent("chat-turn-51ac-shortened")
+    .charge();
 
   if (!trimmed.ok) {
     throw new Error(`A budget was exceeded! Hold your horses!`);

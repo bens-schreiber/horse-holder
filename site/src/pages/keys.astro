@@ -29,9 +29,11 @@ if (Astro.request.method === "POST") {
   Astro.response.headers.set("cache-control", "no-store");
 }
 
-const snippet = (apiKey: string) => `import { HorseHolderClient } from "@horse-holder/client";
+const snippet = (
+  apiKey: string,
+) => `import { HorseHolderClient } from "@horse-holder/client";
 
-const hhldr = new HorseHolderClient({
+const hh = new HorseHolderClient({
   baseUrl: "https://horseholder.dev",
   apiKey: "${apiKey}",
 });`;
@@ -56,8 +58,8 @@ const curl = (apiKey: string) => `curl https://horseholder.dev/v1/whoami \\
       issued === null ? (
         <>
           <p class="story">
-            No sign-up, no email, no card. Free and unlimited. The key is shown once, so copy it
-            when it appears.
+            No sign-up, no email, no card. Free and unlimited. The key is shown
+            once, so copy it when it appears.
           </p>
           <form method="post">
             <button class="btn" type="submit">
@@ -70,8 +72,8 @@ const curl = (apiKey: string) => `curl https://horseholder.dev/v1/whoami \\
           <h2 id="issued-heading">Your key</h2>
 
           <p class="warning">
-            <strong>This is the only time this key is shown.</strong> If you lose it, issue
-            another.
+            <strong>This is the only time this key is shown.</strong> If you
+            lose it, issue another.
           </p>
 
           <span class="field-label">Account ID</span>
