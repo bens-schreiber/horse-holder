@@ -25,27 +25,22 @@ const hh = new HorseHolderClient({
   apiKey: process.env.HORSEHOLDER_API_KEY,
 });
 
-const storage = hh.group({
-  id: "r2-storage",
-  budgets: {
-    "put-ops": {
-      limit: 1_000_000,
-      renewal: renewal.monthly(),
-    },
-    "egress-bytes": {
-      limit: 50_000_000_000,
-      renewal: renewal.monthly(),
-    },
-  },
-});
+const storage = hh
+  .group("r2-storage")
+  .budget("put-ops", {
+    limit: 1_000_000,
+    renewal: renewal.monthly(),
+  })
+  .budget("egress-bytes", {
+    limit: 50_000_000_000,
+    renewal: renewal.monthly(),
+  });
 
-const result = await storage.charge(
-  {
-    "put-ops": 1,
-    "egress-bytes": object.size,
-  },
-  { idempotencyKey: uploadId },
-);
+const result = await storage
+  .draw("put-ops", 1)
+  .draw("egress-bytes", object.size)
+  .idempotent(uploadId)
+  .charge();
 
 if (!result.ok) {
   return tooExpensive({ retryAfter: result.retryAfter });
@@ -66,13 +61,8 @@ No setup call. No migration. Limits ride along with every draw, so changing one 
 Some budgets should never come back.
 
 ```ts
-const trial = hh.group({
-  id: "trial",
-  budgets: {
-    // 100 free renders, ever.
-    renders: { limit: 100, renewal: renewal.never() },
-  },
-});
+// 100 free renders, ever.
+const trial = hh.group("trial").budget("renders", { limit: 100, renewal: renewal.never() });
 ```
 
 `renewsAt` comes back `null`, and so does `retryAfter`, because waiting will not help anyone.
@@ -82,20 +72,19 @@ const trial = hh.group({
 Windows reset on the clock rather than rolling continuously:
 
 ```ts
-const api = hh.group({
-  id: "api-calls",
-  budgets: {
-    "per-minute": { limit: 60, renewal: renewal.seconds(60) },
-    "per-hour": { limit: 1_000, renewal: renewal.seconds(3_600) },
-    "per-day": { limit: 10_000, renewal: renewal.daily({ timezone: "America/Chicago" }) },
-  },
-});
+const api = hh
+  .group("api-calls")
+  .budget("per-minute", { limit: 60, renewal: renewal.seconds(60) })
+  .budget("per-hour", { limit: 1_000, renewal: renewal.seconds(3_600) })
+  .budget("per-day", { limit: 10_000, renewal: renewal.daily({ timezone: "America/Chicago" }) });
 
 // One call. Trips on whichever wall it hits first.
-const burst = await api.charge(
-  { "per-minute": 1, "per-hour": 1, "per-day": 1 },
-  { idempotencyKey: requestId },
-);
+const burst = await api
+  .draw("per-minute", 1)
+  .draw("per-hour", 1)
+  .draw("per-day", 1)
+  .idempotent(requestId)
+  .charge();
 
 if (!burst.ok) {
   return rateLimited({
@@ -107,35 +96,28 @@ if (!burst.ok) {
 
 ## One budget per customer
 
-`tenant()` re-points the same group at somebody else. Same declaration, same connection, separate money.
+`tenant()` re-points the same group at somebody else. Same declaration, same connection, separate money. It sits on the group when the customer is fixed, and on the draw when it changes per request.
 
 ```ts
-const ci = hh.group({
-  id: "ci-builds",
-  budgets: {
-    "build-minutes": { limit: 500, renewal: renewal.monthly() },
-  },
-});
+const ci = hh
+  .group("ci-builds")
+  .budget("build-minutes", { limit: 500, renewal: renewal.monthly() });
 
 const cmpgn1 = ci.tenant("vox machina");
-const cmpgn2 = ci.tenant("mighty nein");
 
-await cmpgn1.charge({ "build-minutes": 12 }, { idempotencyKey: "build-1187" });
-await cmpgn2.charge({ "build-minutes": 3 }, { idempotencyKey: "build-2043" });
+await cmpgn1.draw("build-minutes", 12).idempotent("build-1187").charge();
+await ci.draw("build-minutes", 3).tenant("mighty nein").idempotent("build-2043").charge();
 // 500 each. They have never met.
 ```
 
-Groups are pure, so per-plan limits are just code:
+Groups are immutable and never touch the network, so per-plan limits are just code:
 
 ```ts
 const limits = { free: 100, pro: 5_000, enterprise: 1_000_000 };
 
-const seats = hh.group({
-  id: "seats",
-  budgets: {
-    "api-calls": { limit: limits[customer.plan], renewal: renewal.monthly() },
-  },
-});
+const seats = hh
+  .group("seats")
+  .budget("api-calls", { limit: limits[customer.plan], renewal: renewal.monthly() });
 
 const quota = seats.tenant(customer.id);
 ```
@@ -145,18 +127,13 @@ const quota = seats.tenant(customer.id);
 Thresholds fire on the way up, once per period.
 
 ```ts
-const mail = hh.group({
-  id: "email",
-  budgets: {
-    sends: {
-      limit: 200_000,
-      warnings: [0.5, 0.8, 0.95],
-      renewal: renewal.monthly(),
-    },
-  },
+const mail = hh.group("email").budget("sends", {
+  limit: 200_000,
+  warnings: [0.5, 0.8, 0.95],
+  renewal: renewal.monthly(),
 });
 
-const sent = await mail.charge({ sends: batch.length }, { idempotencyKey: batchId });
+const sent = await mail.draw("sends", batch.length).idempotent(batchId).charge();
 
 if (sent.ok) {
   for (const { id, thresholds } of sent.warningsCrossed) {
@@ -172,10 +149,10 @@ One big draw jumping 40% to 90% reports both `0.5` and `0.8`, so nothing gets sk
 ## Reserve now, settle later
 
 ```ts
-const lease = await storage.reserve(
-  { "egress-bytes": estimate },
-  { idempotencyKey: jobId, ttlSeconds: 60 },
-);
+const lease = await storage
+  .draw("egress-bytes", estimate)
+  .idempotent(jobId)
+  .reserve({ ttlSeconds: 60 });
 
 if (!lease.ok) return;
 

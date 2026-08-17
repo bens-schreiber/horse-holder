@@ -10,37 +10,35 @@ import { HorseHolderClient, renewal } from "@horse-holder/client";
 
 export const name = "charge and read";
 
-const hhldr = new HorseHolderClient({
+const hh = new HorseHolderClient({
   baseUrl: process.env["HH_BASE_URL"]!,
   apiKey: process.env["HORSEHOLDER_API_KEY"]!,
 });
 
 // A Cloudflare R2 object storage bucket
-const r2 = hhldr.group({
-  id: "r2",
-  budgets: {
-    // The amount of R2 PUT operations, limited to 1,000 per day.
-    "put-ops": {
-      limit: 1_000,
-      renewal: renewal.daily({ timezone: "America/Chicago" }),
-    },
-    // The amount of storage used, limited to 1,000,000 bytes per month.
-    "storage-bytes": {
-      limit: 1_000_000,
-      renewal: renewal.monthly({ timezone: "America/Chicago" }),
-    },
-  },
-});
+const r2 = hh
+  .group("r2")
+  // The amount of R2 PUT operations, limited to 1,000 per day.
+  .budget("put-ops", {
+    limit: 1_000,
+    renewal: renewal.daily({ timezone: "America/Chicago" }),
+  })
+  // The amount of storage used, limited to 1,000,000 bytes per month.
+  .budget("storage-bytes", {
+    limit: 1_000_000,
+    renewal: renewal.monthly({ timezone: "America/Chicago" }),
+  });
 
 export async function run(): Promise<void> {
   // Immediately charge a small amount against both budgets.
   //
   // This is a single atomic operation. Either all budgets are
   // drawn against, or neither is.
-  const result = await r2.charge(
-    { "put-ops": 1, "storage-bytes": 4_096 },
-    { idempotencyKey: "upload-8b21f0" },
-  );
+  const result = await r2
+    .draw("put-ops", 1)
+    .draw("storage-bytes", 4_096)
+    .idempotent("upload-8b21f0")
+    .charge();
 
   if (!result.ok) {
     throw new Error(`A budget was exceeded! Hold your horses!`);

@@ -2,25 +2,23 @@
 import { Code } from "astro:components";
 import Meter from "./Meter.astro";
 
-const example = `const cdn = hhldr.group({
-  id: "cdn",
-  budgets: {
-    "requests": { limit: 5_000 },
-    "egress-kb": { limit: 1_000_000 },
-  },
-});
+const example = `// A Cloud SMS provider
+const sms = hh.group("sms")
+  .budget("messages", { limit: 50_000, renewal: renewal.monthly() })
+  .budget("segments", { limit: 100_000, renewal: renewal.monthly() });
 
-// A 5 GB download against an egress
-// budget that has 4 MB left.
-const refused = await cdn.charge(
-  { "requests": 1, "egress-kb": 5_000_000 },
-  { idempotencyKey: "asset-51ac" },
-);`;
+// A 3-segment blast to 12,000 phones against
+// a segment budget with 880 left.
+const result = await sms
+  .draw("messages", 12_000)
+  .draw("segments", 36_000)
+  .idempotent("blast-51ac")
+  .charge();`;
 ---
 
 <div class="slab">
   <div class="slab-code">
-    <div class="slab-label">cdn.charge(…)</div>
+    <div class="slab-label">sms.charge(…)</div>
     <Code code={example} lang="ts" theme="css-variables" />
   </div>
 
@@ -30,12 +28,23 @@ const refused = await cdn.charge(
       <span class="status-text">budget_exceeded</span>
     </div>
 
-    <Meter name="requests" used={2411} limit={5000} display="2,411 / 5,000" />
-    <Meter name="egress-kb" used={996000} limit={1000000} display="996k / 1,000k" exceeded />
+    <Meter
+      name="messages"
+      used={18204}
+      limit={50000}
+      display="18,204 / 50,000"
+    />
+    <Meter
+      name="segments"
+      used={99120}
+      limit={100000}
+      display="99,120 / 100,000"
+      exceeded
+    />
 
     <p class="verdict">
-      <strong>Nothing was spent.</strong> Not on the budget that ran out, and not on the one that
-      had room. Retry in 12d.
+      <strong>Nothing was spent.</strong> Not on the budget that ran out, and not
+      on the one that had room. Retry in 12d.
     </p>
   </div>
 </div>

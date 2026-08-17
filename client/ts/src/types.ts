@@ -1,6 +1,10 @@
 /**
  * What you declare, what you get back, and the shapes that cross the wire between them.
  *
+ * Everything here is parameterized by `Ids`, the union of budget names a group has declared.
+ * A group builds that union up one `.budget()` call at a time, and every draw, result, and
+ * correction below is checked against it.
+ *
  * The response types are the wire types: there is no second representation to map onto, only
  * `renewsAt` promoted from a string to a `Date`.
  */
@@ -49,28 +53,16 @@ export interface BudgetSpec {
   readonly renewal: Renewal;
 }
 
-/** The budgets in a group: a plain object from budget id to its configuration. */
-export type BudgetsSpec = Readonly<Record<string, BudgetSpec>>;
-
-/** A group declaration. */
-export interface GroupSpec<B extends BudgetsSpec> {
-  /** A name for this group. Letters, digits, underscore, dot, and dash. */
-  readonly id: string;
-  /** The budgets that live in it. */
-  readonly budgets: B;
-}
+/** The budgets a group has declared, keyed by id. */
+export type BudgetsSpec<Ids extends string = string> = { readonly [K in Ids]: BudgetSpec };
 
 /**
- * How much to draw from each budget, keyed by budget id.
+ * How much to draw from, or correct on, each of a set of budgets.
  *
- * Draw any subset you like, from one budget up to sixteen. Naming a budget that is not in the
- * group is a compile error, and naming the same one twice is not something you can write.
- *
- * ```ts
- * { "put-ops": 1, "storage-bytes": 4096 }
- * ```
+ * Naming a budget outside the set is a compile error, and naming the same one twice is not
+ * something you can write.
  */
-export type Amounts<B extends BudgetsSpec> = { readonly [K in keyof B]?: number };
+export type Amounts<Ids extends string> = { readonly [K in Ids]?: number };
 
 // -- Results
 
@@ -115,12 +107,36 @@ export interface WarningCrossing<Id extends string = string> {
   readonly thresholds: readonly number[];
 }
 
-interface DrawResultBase<B extends BudgetsSpec> {
+/**
+ * Called when a draw pushes a budget past one of its warning thresholds.
+ *
+ * Set once on the client, so logging or paging has somewhere to live that is not every call
+ * site.
+ */
+export type WarningHandler = (warning: {
+  /** The group the budget belongs to. */
+  group: string;
+  /** Which of your end users this was for, or `null` for no tenant. */
+  tenant: string | null;
+  /** The budget that crossed. Same as `budget.id`, up here because it is what you want. */
+  id: string;
+  /** What it crossed, smallest first. Same as `budget.warningsCrossed`. */
+  thresholds: readonly number[];
   /**
-   * Every budget in the group, not only the ones you drew from, ordered by id.
+   * The budget as it stands after the draw, so you can say how bad it is rather than only
+   * which line was passed: `used`, `limit`, `remaining`, and `renewsAt` are all here.
+   */
+  budget: BudgetOutcome;
+}) => void;
+
+interface DrawResultBase<Ids extends string> {
+  /**
+   * Every budget in the group that exists on the server, not only the ones you drew from,
+   * ordered by id. The ones you did not draw from report `requested: 0`.
    *
-   * One call tells you where everything stands. The ones you did not draw from report
-   * `requested: 0`.
+   * A budget you have declared but never drawn from does not exist yet and so is not in here.
+   * `get()` covers that case and this list does not, which is why it is the one to reach for
+   * when you want a particular budget rather than a tour of them all.
    */
   readonly budgets: readonly BudgetOutcome[];
   /**
@@ -129,19 +145,19 @@ interface DrawResultBase<B extends BudgetsSpec> {
    * Always returns something, so there is nothing to null-check:
    *
    * ```ts
-   * const result = await r2.charge({ "put-ops": 1 }, { idempotencyKey: key });
+   * const result = await r2.draw("put-ops", 1).idempotent(key).charge();
    * result.get("put-ops").remaining;      // the one you drew
    * result.get("storage-bytes").used;     // also fine, you get the whole group back
    * result.get("nonsense");               // compile error, not in this group
    * ```
    */
-  get(id: keyof B & string): BudgetOutcome;
+  get(id: Ids): BudgetOutcome;
   /** The raw response body, in case your server includes fields this client does not model. */
   readonly raw: unknown;
 }
 
 /** A draw that went through. Every budget had room, and the counters moved. */
-export interface DrawOk<B extends BudgetsSpec> extends DrawResultBase<B> {
+export interface DrawOk<Ids extends string> extends DrawResultBase<Ids> {
   /**
    * Always `true` here. Check this to tell the two results apart.
    *
@@ -159,7 +175,7 @@ export interface DrawOk<B extends BudgetsSpec> extends DrawResultBase<B> {
    * }
    * ```
    */
-  readonly warningsCrossed: readonly WarningCrossing<keyof B & string>[];
+  readonly warningsCrossed: readonly WarningCrossing<Ids>[];
 }
 
 /**
@@ -182,7 +198,7 @@ export interface DrawOk<B extends BudgetsSpec> extends DrawResultBase<B> {
  * }
  * ```
  */
-export interface DrawFailed<B extends BudgetsSpec> extends DrawResultBase<B> {
+export interface DrawFailed<Ids extends string> extends DrawResultBase<Ids> {
   readonly ok: false;
   /** Just the budgets that ran out. Never empty. */
   readonly exceeded: readonly BudgetOutcome[];
@@ -198,19 +214,17 @@ export interface DrawFailed<B extends BudgetsSpec> extends DrawResultBase<B> {
  *
  * Branch on `ok`. It is `false` only when a budget was exceeded; everything else throws.
  */
-export type DrawResult<B extends BudgetsSpec> = DrawOk<B> | DrawFailed<B>;
+export type DrawResult<Ids extends string> = DrawOk<Ids> | DrawFailed<Ids>;
 
 /**
  * A hold on some capacity, and the two ways to finish with it.
  *
- * `R` is the set of budget ids this hold actually reserved, so correcting one it never held is
- * a compile error rather than a rejected request.
+ * `Held` is the set of budget ids the hold actually reserved, so correcting one it never held
+ * is a compile error rather than a rejected request.
  */
-export interface Lease<B extends BudgetsSpec, R extends keyof B & string = keyof B & string> {
+export interface Reservation<Ids extends string, Held extends Ids = Ids> {
   /** The server's id for this hold. Carry it if you need to settle from another process. */
   readonly reservationId: string;
-  /** When the hold lapses on its own and the capacity comes back automatically. */
-  readonly expiresAt: Date;
   /**
    * Spend the hold, optionally correcting the amounts now that you know the real cost.
    *
@@ -226,17 +240,20 @@ export interface Lease<B extends BudgetsSpec, R extends keyof B & string = keyof
    * back `ok: false`. If it does, the hold stays open and unchanged and you can either try a
    * smaller number or release it.
    */
-  commit(
-    corrections?: { readonly [K in R]?: number },
-    options?: SettleOptions,
-  ): Promise<DrawResult<B>>;
+  commit(corrections?: Amounts<Held>, options?: RequestOptions): Promise<DrawResult<Ids>>;
   /**
    * Give the hold back without spending it.
    *
    * Safe to call twice, so you can put it in a `catch` without tracking whether you already
    * released.
    */
-  release(options?: SettleOptions): Promise<DrawOk<B>>;
+  release(options?: RequestOptions): Promise<DrawOk<Ids>>;
+}
+
+/** A reservation you are holding right now, so you also know when it lapses. */
+export interface Lease<Ids extends string, Held extends Ids = Ids> extends Reservation<Ids, Held> {
+  /** When the hold lapses on its own and the capacity comes back automatically. */
+  readonly expiresAt: Date;
 }
 
 /**
@@ -246,21 +263,21 @@ export interface Lease<B extends BudgetsSpec, R extends keyof B & string = keyof
  * you the thing you settle with:
  *
  * ```ts
- * const lease = await r2.reserve({ "put-ops": 1 }, { idempotencyKey: key, ttlSeconds: 60 });
+ * const lease = await r2.draw("put-ops", 1).idempotent(key).reserve({ ttlSeconds: 60 });
  * if (!lease.ok) return;
  * await lease.commit();
  * ```
  */
-export type ReserveResult<B extends BudgetsSpec, R extends keyof B & string = keyof B & string> =
-  | (DrawOk<B> & Lease<B, R>)
-  | DrawFailed<B>;
+export type ReserveResult<Ids extends string, Held extends Ids = Ids> =
+  | (DrawOk<Ids> & Lease<Ids, Held>)
+  | DrawFailed<Ids>;
 
 /**
  * The state of a whole group, from a read.
  *
  * Only holds budgets that have actually been drawn from at least once.
  */
-export interface GroupState<B extends BudgetsSpec> {
+export interface GroupState<Ids extends string> {
   /** Every budget in the group that exists, ordered by id. */
   readonly budgets: readonly BudgetState[];
   /**
@@ -271,25 +288,25 @@ export interface GroupState<B extends BudgetsSpec> {
    * console.log(putOps === undefined ? "untouched" : `${putOps.used} used`);
    * ```
    */
-  get(id: keyof B & string): BudgetState | undefined;
+  get(id: Ids): BudgetState | undefined;
   /** The raw response body. */
   readonly raw: unknown;
 }
 
 // -- Options
 
-/** Options accepted by every method. */
+/** Options accepted by every call that reaches the server. */
 export interface RequestOptions {
   /**
    * Which of your end users this request is for.
    *
    * Tenants let one budget declaration give every customer their own private copy of it, so
-   * "1000 writes a day" means 1000 each rather than 1000 shared. Usually you set this once with
-   * `group.tenant` rather than per call.
+   * "1000 writes a day" means 1000 each rather than 1000 shared. Usually you set this with
+   * `.tenant()` on the group or the draw rather than per call.
    *
    * There are three states, and they are genuinely three different budgets:
    *
-   * - **leave it out** to use whatever the client or group was set up with
+   * - **leave it out** to use whatever the client, group, or draw was set up with
    * - **`null`** for no tenant at all, the plain unsubdivided budget
    * - **`""`** for a tenant whose name is the empty string, which is a normal tenant that
    *   happens to be called nothing
@@ -307,29 +324,8 @@ export interface RequestOptions {
   readonly timeoutMs?: number | undefined;
 }
 
-/** Options for a charge or a reserve, which both need an idempotency key. */
-export interface DrawOptions extends RequestOptions {
-  /**
-   * A string that identifies *this operation*, so a retry cannot double-charge you.
-   *
-   * If a request is sent twice with the same key, the second one returns whatever the first one
-   * did instead of spending again. That is what makes it safe for this client to retry
-   * automatically after a dropped connection.
-   *
-   * The important part: derive it from the thing you are doing, not from the attempt. One key
-   * per upload, per order, per webhook delivery, reused across every retry of that same
-   * operation. A fresh random key on each attempt turns the protection off entirely.
-   *
-   * ```ts
-   * { idempotencyKey: `upload-${uploadId}` }   // good
-   * { idempotencyKey: crypto.randomUUID() }    // pointless, unless you store and reuse it
-   * ```
-   */
-  readonly idempotencyKey: string;
-}
-
-/** Options for a reserve. */
-export interface ReserveOptions extends DrawOptions {
+/** Options for a reserve, which can also say how long the hold should last. */
+export interface ReserveOptions extends RequestOptions {
   /**
    * How long the hold lasts, in seconds. Defaults to whatever the server uses, often 300.
    *
@@ -339,9 +335,6 @@ export interface ReserveOptions extends DrawOptions {
    */
   readonly ttlSeconds?: number | undefined;
 }
-
-/** Options for finishing a reservation. No idempotency key, the reservation id is enough. */
-export type SettleOptions = RequestOptions;
 
 // -- Wire shapes
 
@@ -357,18 +350,13 @@ export interface DrawnBudget {
   warningsCrossed: number[];
 }
 
-/** A `budgets` entry on a read, which reports state with no outcome attached. */
-export interface ReadBudget {
-  id: string;
-  limit: number;
-  used: number;
-  remaining: number;
-  renewsAt: string | null;
-}
-
 /** Any response body this client understands. */
 export interface Response$ {
-  budgets?: (DrawnBudget | ReadBudget)[];
+  /**
+   * A read reports state with no outcome attached, so the outcome fields are absent there.
+   * Only `read` touches such a response, and it reads none of them.
+   */
+  budgets?: DrawnBudget[];
   reservationId?: string;
   expiresAt?: string;
   error?: { code?: string; message?: string };

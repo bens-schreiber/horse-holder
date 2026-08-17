@@ -10,7 +10,7 @@ import { HorseHolderClient, renewal } from "@horse-holder/client";
 
 export const name = "reserve then release after a failure";
 
-const hhldr = new HorseHolderClient({
+const hh = new HorseHolderClient({
   baseUrl: process.env["HH_BASE_URL"]!,
   apiKey: process.env["HORSEHOLDER_API_KEY"]!,
 });
@@ -21,29 +21,27 @@ async function sendViaProvider(): Promise<never> {
 }
 
 // An SES-style transactional email budget.
-const email = hhldr.group({
-  id: "transactional-email",
-  budgets: {
-    // The amount of messages sent, limited to 10,000 per day.
-    "messages-sent": {
-      limit: 10_000,
-      renewal: renewal.daily({ timezone: "UTC" }),
-    },
-    // The amount of attachment data sent, limited to 5,000,000 bytes per day.
-    "attachment-bytes": {
-      limit: 5_000_000,
-      renewal: renewal.daily({ timezone: "UTC" }),
-    },
-  },
-});
+const email = hh
+  .group("transactional-email")
+  // The amount of messages sent, limited to 10,000 per day.
+  .budget("messages-sent", {
+    limit: 10_000,
+    renewal: renewal.daily({ timezone: "UTC" }),
+  })
+  // The amount of attachment data sent, limited to 5,000,000 bytes per day.
+  .budget("attachment-bytes", {
+    limit: 5_000_000,
+    renewal: renewal.daily({ timezone: "UTC" }),
+  });
 
 export async function run(): Promise<void> {
   // Take the capacity before calling the provider, so two senders cannot both
   // think they have the last of the day's quota.
-  const lease = await email.reserve(
-    { "messages-sent": 1, "attachment-bytes": 50_000 },
-    { idempotencyKey: "receipt-email-9f30", ttlSeconds: 60 },
-  );
+  const lease = await email
+    .draw("messages-sent", 1)
+    .draw("attachment-bytes", 50_000)
+    .idempotent("receipt-email-9f30")
+    .reserve({ ttlSeconds: 60 });
 
   if (!lease.ok) {
     throw new Error(`A budget was exceeded! Hold your horses!`);

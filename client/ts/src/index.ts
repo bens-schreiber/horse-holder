@@ -9,19 +9,15 @@
  * ```ts
  * import { HorseHolderClient, renewal } from "@horse-holder/client";
  *
- * const hhldr = new HorseHolderClient({
+ * const hh = new HorseHolderClient({
  *   baseUrl: process.env.HORSEHOLDER_URL!,
  *   apiKey: process.env.HORSEHOLDER_API_KEY,
  * });
  *
- * const r2 = hhldr.group({
- *   id: "r2",
- *   budgets: {
- *     "put-ops": { limit: 1_000, renewal: renewal.daily({ timezone: "America/Chicago" }) },
- *   },
- * });
+ * const r2 = hh.group("r2")
+ *   .budget("put-ops", { limit: 1_000, renewal: renewal.daily({ timezone: "America/Chicago" }) });
  *
- * const result = await r2.charge({ "put-ops": 1 }, { idempotencyKey: `upload-${id}` });
+ * const result = await r2.draw("put-ops", 1).idempotent(`upload-${id}`).charge();
  * if (result.ok) {
  *   await uploadTheFile();
  * }
@@ -31,8 +27,8 @@
  * server. Point `baseUrl` at any Horse Holder implementation and it works the same way.
  */
 
-import { BudgetGroup, type WarningHandler, assertIdentifier, assertTenant } from "./group.ts";
-import { invalid } from "./errors.ts";
+import { BudgetGroup } from "./group.ts";
+import { type Session, assertIdentifier, assertTenant } from "./session.ts";
 import {
   type FetchLike,
   type HeaderSource,
@@ -40,10 +36,11 @@ import {
   Transport,
   type TransportOptions,
 } from "./transport.ts";
-import type { BudgetsSpec, GroupSpec } from "./types.ts";
+import type { WarningHandler } from "./types.ts";
 
 export { HorseHolderError, isHorseHolderError, type ErrorCode } from "./errors.ts";
-export { BudgetGroup, type WarningHandler } from "./group.ts";
+export { Draw, KeyedDraw } from "./draw.ts";
+export { BudgetGroup } from "./group.ts";
 export {
   type CalendarOptions,
   type CalendarRenewal,
@@ -62,16 +59,15 @@ export type {
   BudgetsSpec,
   DrawFailed,
   DrawOk,
-  DrawOptions,
   DrawResult,
-  GroupSpec,
   GroupState,
   Lease,
   RequestOptions,
+  Reservation,
   ReserveOptions,
   ReserveResult,
-  SettleOptions,
   WarningCrossing,
+  WarningHandler,
 } from "./types.ts";
 
 /** How to reach the server. */
@@ -99,7 +95,7 @@ export interface ClientOptions extends TransportOptions {
    * A default tenant for every request.
    *
    * Leave it out for no tenant. Pass `""` for the tenant literally named `""`, which is a
-   * different budget. Override per group or per call.
+   * different budget. Override per group, per draw, or per call.
    */
   readonly tenant?: string | null | undefined;
   /** Your own `fetch`, for tests or a custom agent. Defaults to the global one. */
@@ -145,7 +141,7 @@ export interface ClientOptions extends TransportOptions {
  * groups. All the interesting methods live on the group.
  *
  * ```ts
- * const hhldr = new HorseHolderClient({
+ * const hh = new HorseHolderClient({
  *   baseUrl: process.env.HORSEHOLDER_URL!,
  *   apiKey: process.env.HORSEHOLDER_API_KEY,
  * });
@@ -167,58 +163,30 @@ export class HorseHolderClient {
   }
 
   /**
-   * Declare a group of budgets.
+   * Open a group, then declare its budgets on it.
    *
-   * This does not talk to the server. Budget configuration travels with each draw, so a group
-   * is really just the one place in your code where those numbers live. Declaring it once and
-   * using it everywhere is what stops two call sites from disagreeing about what the limit is.
-   *
-   * ```ts
-   * const r2 = hhldr.group({
-   *   id: "r2",
-   *   budgets: {
-   *     "put-ops": {
-   *       limit: 1_000,
-   *       warnings: [0.5, 0.8],
-   *       renewal: renewal.daily({ timezone: "America/Chicago" }),
-   *     },
-   *     "storage-bytes": { limit: 1_000_000, renewal: renewal.monthly() },
-   *   },
-   * });
-   * ```
-   *
-   * The budget names become part of the type, so a typo is caught while you are writing it
-   * rather than silently creating a brand new budget called `put-obs` at runtime.
-   *
-   * Since this is an ordinary function call, per-customer limits are ordinary code:
+   * This does not talk to the server, and neither does anything else until a draw ends in a
+   * charge or a reserve. Configuration travels with every draw, so there is no setup call and
+   * no migration: a group is the one place in your code where the numbers live.
    *
    * ```ts
-   * const r2 = hhldr.group({
-   *   id: "r2",
-   *   budgets: { "put-ops": { limit: plan.putOps, renewal: renewal.monthly() } },
-   * });
+   * const r2 = hh.group("r2")
+   *   .budget("put-ops", { limit: 1_000, renewal: renewal.daily() })
+   *   .budget("storage-bytes", { limit: 1_000_000, renewal: renewal.monthly() });
    * ```
+   *
+   * A group with nothing declared on it yet is legal and useless: there is nothing a draw can
+   * name until you have declared something.
    */
-  group<const B extends BudgetsSpec>(spec: GroupSpec<B>): BudgetGroup<B> {
-    assertIdentifier(spec.id, "group id");
-
-    const budgets = Object.entries(spec.budgets);
-    if (budgets.length === 0) {
-      invalid(`group ${JSON.stringify(spec.id)} declares no budgets`);
-    }
-    for (const [id, budget] of budgets) {
-      assertIdentifier(id, "budget id");
-      if (!Number.isFinite(budget.limit) || budget.limit <= 0) {
-        invalid(`budget ${JSON.stringify(id)}: limit must be positive, got ${budget.limit}`);
-      }
-      for (const warning of budget.warnings ?? []) {
-        if (!(warning > 0 && warning < 1)) {
-          const bounds = "warning thresholds must be strictly between 0 and 1";
-          invalid(`budget ${JSON.stringify(id)}: ${bounds}, got ${warning}`);
-        }
-      }
-    }
-
-    return new BudgetGroup(spec, this.transport, this.tenant, this.onWarning);
+  group(id: string): BudgetGroup {
+    assertIdentifier(id, "group id");
+    const session: Session = {
+      transport: this.transport,
+      group: id,
+      budgets: {},
+      tenant: this.tenant,
+      onWarning: this.onWarning,
+    };
+    return new BudgetGroup(session);
   }
 }

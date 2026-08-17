@@ -13,7 +13,7 @@ export const name = "warnings cross once each";
 /** Whatever you would really do here: page someone, log it, email the customer. */
 const paged: string[] = [];
 
-const hhldr = new HorseHolderClient({
+const hh = new HorseHolderClient({
   baseUrl: process.env["HH_BASE_URL"]!,
   apiKey: process.env["HORSEHOLDER_API_KEY"]!,
 
@@ -27,38 +27,35 @@ const hhldr = new HorseHolderClient({
 
 // A Twilio-style SMS budget, counted in hundredths of a cent. Money is
 // better tracked in whole small units than in floating point dollars.
-const sms = hhldr.group({
-  id: "sms-campaign",
-  budgets: {
-    // The amount spent on messages, limited to 100,000 hundredths of a cent per month.
-    "spend-millicents": {
-      limit: 100_000,
-      warnings: [0.25, 0.5, 0.9],
-      renewal: renewal.monthly({ timezone: "America/Los_Angeles" }),
-    },
-  },
-});
+const sms = hh
+  .group("sms-campaign")
+  // The amount spent on messages, limited to 100,000 hundredths of a cent per month.
+  .budget("spend-millicents", {
+    limit: 100_000,
+    warnings: [0.25, 0.5, 0.9],
+    renewal: renewal.monthly({ timezone: "America/Los_Angeles" }),
+  });
 
 export async function run(): Promise<void> {
   // Four batches through the month, walking the budget from empty to nearly
   // spent. One after another, since which batch trips which threshold is the
   // thing being shown here.
-  const first = await sms.charge(
-    { "spend-millicents": 30_000 },
-    { idempotencyKey: "campaign-jan-batch-1" },
-  );
-  const second = await sms.charge(
-    { "spend-millicents": 40_000 },
-    { idempotencyKey: "campaign-jan-batch-2" },
-  );
-  const third = await sms.charge(
-    { "spend-millicents": 5_000 },
-    { idempotencyKey: "campaign-jan-batch-3" },
-  );
-  const fourth = await sms.charge(
-    { "spend-millicents": 20_000 },
-    { idempotencyKey: "campaign-jan-batch-4" },
-  );
+  const first = await sms
+    .draw("spend-millicents", 30_000)
+    .idempotent("campaign-jan-batch-1")
+    .charge();
+  const second = await sms
+    .draw("spend-millicents", 40_000)
+    .idempotent("campaign-jan-batch-2")
+    .charge();
+  const third = await sms
+    .draw("spend-millicents", 5_000)
+    .idempotent("campaign-jan-batch-3")
+    .charge();
+  const fourth = await sms
+    .draw("spend-millicents", 20_000)
+    .idempotent("campaign-jan-batch-4")
+    .charge();
 
   if (!first.ok || !second.ok || !third.ok || !fourth.ok) {
     throw new Error(`A budget was exceeded! Hold your horses!`);
