@@ -1,32 +1,3 @@
-/**
- * A TypeScript client for Horse Holder: budget limits you check *before* you spend, not after.
- *
- * The idea is simple. You tell the server "this budget allows 1000 writes a day", and every
- * time you are about to do a write you ask for one. If there is room you get it and the counter
- * moves. If there is not, you get told no, and you skip the work instead of discovering at the
- * end of the month that you spent too much.
- *
- * ```ts
- * import { HorseHolderClient, renewal } from "@horse-holder/client";
- *
- * const hh = new HorseHolderClient({
- *   baseUrl: process.env.HORSEHOLDER_URL!,
- *   apiKey: process.env.HORSEHOLDER_API_KEY,
- * });
- *
- * const r2 = hh.group("r2")
- *   .budget("put-ops", { limit: 1_000, renewal: renewal.daily({ timezone: "America/Chicago" }) });
- *
- * const result = await r2.draw("put-ops", 1).idempotent(`upload-${id}`).charge();
- * if (result.ok) {
- *   await uploadTheFile();
- * }
- * ```
- *
- * There are no dependencies here, and nothing in this package knows anything about a particular
- * server. Point `baseUrl` at any Horse Holder implementation and it works the same way.
- */
-
 import { BudgetGroup } from "./group.ts";
 import { type Session, assertIdentifier, assertTenant } from "./session.ts";
 import {
@@ -50,7 +21,7 @@ export {
   renewal,
   type Renewal,
 } from "./renewal.ts";
-export { type FetchLike, type RetryOptions } from "./transport.ts";
+export { DEFAULT_BASE_URL, type FetchLike, type RetryOptions } from "./transport.ts";
 export type {
   Amounts,
   BudgetOutcome,
@@ -75,8 +46,11 @@ export interface ClientOptions extends TransportOptions {
   /**
    * Where the server lives. Give it the root, not the versioned path:
    * `https://budgets.example.com`, and `/v1` gets appended for you.
+   *
+   * Leave it out for the hosted server at `https://horseholder.com`. Point it anywhere else to
+   * use your own deployment, or any other conforming implementation.
    */
-  readonly baseUrl: string;
+  readonly baseUrl?: string | undefined;
   /** Shorthand for sending `authorization: Bearer <key>`, which is what most servers want. */
   readonly apiKey?: string | undefined;
   /**
@@ -142,9 +116,15 @@ export interface ClientOptions extends TransportOptions {
  *
  * ```ts
  * const hh = new HorseHolderClient({
- *   baseUrl: process.env.HORSEHOLDER_URL!,
  *   apiKey: process.env.HORSEHOLDER_API_KEY,
  * });
+ * ```
+ *
+ * `baseUrl` defaults to the hosted server at `https://horseholder.com`, so pointing somewhere
+ * else is the only reason to set it:
+ *
+ * ```ts
+ * const hh = new HorseHolderClient({ baseUrl: "https://your-worker.workers.dev" });
  * ```
  *
  * Getting an account and an API key is not part of the protocol and so is not part of this
@@ -155,7 +135,7 @@ export class HorseHolderClient {
   private readonly tenant: string | null;
   private readonly onWarning: WarningHandler | undefined;
 
-  constructor(options: ClientOptions) {
+  constructor(options: ClientOptions = {}) {
     this.transport = new Transport(options);
     this.tenant = options.tenant ?? null;
     assertTenant(this.tenant);

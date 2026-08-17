@@ -4,10 +4,11 @@ import ExampleSlab from "../components/ExampleSlab.astro";
 import GitHubLink from "../components/GitHubLink.astro";
 import Base from "../layouts/Base.astro";
 
+const install = `npm install @horse-holder/client`;
+
 const declare = `import { HorseHolderClient, renewal } from "@horse-holder/client";
 
 const hh = new HorseHolderClient({
-  baseUrl: "https://horseholder.dev",
   apiKey: process.env.HORSEHOLDER_API_KEY,
 });
 
@@ -56,8 +57,8 @@ if (lease.ok) {
     <h1 class="tagline">Hold your horses.</h1>
 
     <p class="lede">
-      Enforce a budget on every cloud resource. One atomic call that answers yes
-      or no. No setup, no migration, no suprise bills.
+      Enforce a budget on any cloud resource. One atomic operation that answers
+      yes or no. No setup, no migration, no suprise bills.
     </p>
 
     <p class="story">
@@ -94,5 +95,15 @@ if (lease.ok) {
       the hold expires on its own.
     </p>
     <Code code={reserve} lang="ts" theme="css-variables" />
+
+    <h2>Install</h2>
+    <p class="story">
+      The client is on npm as <a
+        href="https://www.npmjs.com/package/@horse-holder/client"
+        rel="noopener">@horse-holder/client</a
+      >. Zero dependencies, and <code>baseUrl</code> defaults here, so an API key
+      is all it needs.
+    </p>
+    <Code code={install} lang="bash" theme="css-variables" />
   </div>
 </Base>

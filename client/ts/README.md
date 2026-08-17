@@ -1,5 +1,7 @@
 # @horse-holder/client
 
+[npm](https://www.npmjs.com/package/@horse-holder/client) · [Website](https://horseholder.com) · [GitHub](https://github.com/bens-schreiber/horse-holder) · [Spec](https://github.com/bens-schreiber/horse-holder/blob/main/spec/spec.md)
+
 Zero-dependency TypeScript client for [Horse Holder v1](https://github.com/bens-schreiber/horse-holder/blob/main/spec/spec.md). Ask before you spend.
 
 It speaks the five endpoints and knows nothing about accounts, keys, or storage. Point `baseUrl` at any conforming server and keep your code.
@@ -7,6 +9,8 @@ It speaks the five endpoints and knows nothing about accounts, keys, or storage.
 ```bash
 npm install @horse-holder/client
 ```
+
+`baseUrl` defaults to the hosted server at [horseholder.com](https://horseholder.com), so the only reason to set it is to point somewhere else. [Grab an API key](https://horseholder.com/keys), or run your own from [the source](https://github.com/bens-schreiber/horse-holder).
 
 ## Declare your budgets
 
@@ -18,7 +22,6 @@ So you declare a group once, then spend against it.
 import { HorseHolderClient, renewal } from "@horse-holder/client";
 
 const hh = new HorseHolderClient({
-  baseUrl: process.env.HORSEHOLDER_URL!,
   apiKey: process.env.HORSEHOLDER_API_KEY,
 });
 
@@ -150,7 +153,7 @@ Your idempotency keys are what make retries safe. Generate one per operation, no
 
 ```ts
 new HorseHolderClient({
-  baseUrl, // required, "/v1" is appended for you
+  baseUrl, // defaults to https://horseholder.com, "/v1" is appended for you
   apiKey, // sugar for `authorization: Bearer <key>`
   headers, // record or sync/async function, for any other auth scheme
   tenant, // default tenant

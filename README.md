@@ -4,8 +4,10 @@
 
 # Hold your horses.
 
-[Website](https://horseholder.dev) · [Spec](spec/spec.md) · [OpenAPI](spec/openapi.yaml) · [Client](client/ts) · [MIT](LICENSE)
+[Website](https://horseholder.com) · [npm](https://www.npmjs.com/package/@horse-holder/client) · [Spec](spec/spec.md) · [OpenAPI](spec/openapi.yaml) · [Client](client/ts) · [MIT](LICENSE)
 </div>
+
+Enforce a budget on any cloud resource. One atomic operation that answers yes or no. No setup, no migration, no suprise bills.
 
 ```bash
 # Install via pnpm
@@ -21,7 +23,6 @@ npm install @horse-holder/client
 import { HorseHolderClient, renewal } from "@horse-holder/client";
 
 const hh = new HorseHolderClient({
-  baseUrl: "https://horseholder.dev",
   apiKey: process.env.HORSEHOLDER_API_KEY,
 });
 
@@ -43,7 +44,7 @@ const result = await storage
   .charge();
 
 if (!result.ok) {
-  return tooExpensive({ retryAfter: result.retryAfter });
+  throw new Error("I'm not made of money!");
 }
 
 await bucket.put(key, object);
@@ -61,7 +62,8 @@ No setup call. No migration. Limits ride along with every draw, so changing one 
 Some budgets should never come back.
 
 ```ts
-// 100 free renders, ever.
+// 100 free renders, not one more.
+// You aren't getting my money today big cloud!
 const trial = hh.group("trial").budget("renders", { limit: 100, renewal: renewal.never() });
 ```
 
@@ -103,23 +105,19 @@ const ci = hh
   .group("ci-builds")
   .budget("build-minutes", { limit: 500, renewal: renewal.monthly() });
 
-const cmpgn1 = ci.tenant("vox machina");
+const res1 = await ci
+  .tenant("vox machina")
+  .draw("build-minutes", 12)
+  .idempotent("build-1187")
+  .charge();
 
-await cmpgn1.draw("build-minutes", 12).idempotent("build-1187").charge();
-await ci.draw("build-minutes", 3).tenant("mighty nein").idempotent("build-2043").charge();
-// 500 each. They have never met.
-```
+const res2 = await ci
+  .tenant("mighty nein")
+  .draw("build-minutes", 3)
+  .idempotent("build-2043")
+  .charge();
 
-Groups are immutable and never touch the network, so per-plan limits are just code:
-
-```ts
-const limits = { free: 100, pro: 5_000, enterprise: 1_000_000 };
-
-const seats = hh
-  .group("seats")
-  .budget("api-calls", { limit: limits[customer.plan], renewal: renewal.monthly() });
-
-const quota = seats.tenant(customer.id);
+// No overlap!
 ```
 
 ## Warning thresholds
@@ -146,6 +144,21 @@ Each threshold fires once per period. Usage bouncing around 80% pages you once, 
 
 One big draw jumping 40% to 90% reports both `0.5` and `0.8`, so nothing gets skipped either.
 
+### onWarning callback
+
+Use the `onWarning` callback to get warnings without having to check the result of every draw.
+
+```ts
+const hh = new HorseHolderClient({
+  apiKey: process.env.HORSEHOLDER_API_KEY,
+
+  // Called once per threshold crossed, per period, per group/budget.
+  onWarning: ({ group, budget, thresholds }) => {
+    console.warn(`Warning: ${group}/${budget} crossed ${thresholds.join(", ")}`);
+  },
+});
+```
+
 ## Reserve now, settle later
 
 ```ts
@@ -166,12 +179,6 @@ try {
 ```
 
 Crash before either one and the hold expires by itself. Your capacity comes home.
-
-The lease knows what it held, in the type:
-
-```ts
-await lease.commit({ "put-ops": 1 }); // compile error, that was never reserved
-```
 
 ## Errors and retries
 
