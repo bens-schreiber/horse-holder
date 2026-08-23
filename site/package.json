@@ -6,8 +6,8 @@
     "@horse-holder/api": "workspace:*"
   },
   "devDependencies": {
-    "@astrojs/cloudflare": "^12.6.0",
-    "astro": "^5.14.0",
-    "wrangler": "^4.42.0"
+    "@astrojs/cloudflare": "^14.2.3",
+    "astro": "^7.2.4",
+    "wrangler": "^4.125.0"
   }
 }
